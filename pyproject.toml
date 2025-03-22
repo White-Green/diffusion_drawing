@@ -1,0 +1,14 @@
+[project]
+name = "diffusion-drawing"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10.7"
+dependencies = [
+    "krita",
+    "pyqt5>=5.15.11",
+    "pyqt5-stubs>=5.15.6.0",
+]
+
+[tool.uv.sources]
+krita = { git = "https://github.com/rbreu/krita-python-mock.git" }

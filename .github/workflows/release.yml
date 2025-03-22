@@ -1,0 +1,30 @@
+name: Build, Tag, and Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build_release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: package
+        run: |
+          chmod +x package.sh
+          ./package.sh
+      - name: release
+        run: |
+          TAG="$(date --utc +%Y-%m-%dT%H%M%S)-${GITHUB_SHA::7}"
+          git tag "$TAG" $GITHUB_SHA
+          git push origin "$TAG"
+          gh release create "$TAG" ./diffusion_drawing.zip

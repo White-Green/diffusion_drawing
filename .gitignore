@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+/*
+!/.github
+!/diffusion_drawing
+!/.gitignore
+!/.gitmodules
+!/.python-version
+!/diffusion_drawing.desktop
+!/LICENSE
+!/package.sh
+!/pyproject.toml
+!/README.md
+!/uv.lock

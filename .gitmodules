@@ -1,0 +1,3 @@
+[submodule "diffusion_drawing/diffusion_controller"]
+	path = diffusion_drawing/diffusion_controller
+	url = https://github.com/White-Green/diffusion_drawing_diffusion_controller

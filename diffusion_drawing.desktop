@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=diffusion_drawing
+X-Python-2-Compatible=false
+Name=DiffusionDrawing
+Comment=Diffusion Models as a Future Brush
