@@ -1,1 +1,4 @@
-zip -9 -r diffusion_drawing.zip diffusion_drawing.desktop diffusion_drawing
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "$0")"
+python scripts/package.py "$@"

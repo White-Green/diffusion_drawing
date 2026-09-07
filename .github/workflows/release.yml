@@ -1,30 +1,72 @@
-name: Build, Tag, and Release
+name: Build Windows plugin
 
 on:
   push:
-    branches:
-      - main
+    branches: [main, 'feat/**']
+  pull_request:
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build_release:
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
+  build:
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: recursive
 
-      - name: package
-        run: |
-          chmod +x package.sh
-          ./package.sh
-      - name: release
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+          architecture: x64
+
+      - name: Test plugin integration
+        run: python -m unittest discover -s tests -v
+
+      - name: Build embedded CPU inference extension
+        uses: PyO3/maturin-action@v1
+        with:
+          maturin-version: v1.15.0
+          rust-toolchain: stable
+          target: x86_64-pc-windows-msvc
+          args: >-
+            --release --locked
+            --manifest-path lineartgen/crates/lineartgen-native/Cargo.toml
+            --out wheels
+
+      - name: Test inference library
+        run: >-
+          cargo test --release --locked --manifest-path lineartgen/Cargo.toml
+          -p lineartgen --no-default-features --features inference-flex --lib
+
+      - name: Package and smoke-test bundled model
+        run: >-
+          python scripts/package.py --wheel-dir wheels
+          --output dist/diffusion_drawing-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diffusion-drawing-windows-x64
+          path: dist/diffusion_drawing-windows-x64.zip
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: diffusion-drawing-windows-x64
+          path: dist
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG="$(date --utc +%Y-%m-%dT%H%M%S)-${GITHUB_SHA::7}"
-          git tag "$TAG" $GITHUB_SHA
-          git push origin "$TAG"
-          gh release create "$TAG" ./diffusion_drawing.zip
+          gh release create "$TAG" --target "$GITHUB_SHA" dist/diffusion_drawing-windows-x64.zip

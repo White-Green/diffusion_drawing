@@ -10,6 +10,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 
 from .diffusion_controller import DiffusionController
+from .native_lineart import NativeLineart, SRGB_PROFILE, capture_bgra
 
 EMBEDDED_EMPTY_IMAGE_FILE_NAME = "empty.png"
 
@@ -18,7 +19,6 @@ LINEART_LAYER_NAME = f"lineart{DIFFUSION_DRAWING_LAYER_MARKER}"
 SHADOW_LAYER_NAME = f"shadow{DIFFUSION_DRAWING_LAYER_MARKER}"
 LIGHT_LAYER_NAME = f"light{DIFFUSION_DRAWING_LAYER_MARKER}"
 
-LINEART_FILE_NAME = "lineart.png"
 SHADOW_FILE_NAME = "shadow.png"
 LIGHT_FILE_NAME = "light.png"
 
@@ -50,6 +50,7 @@ class DiffusionDrawingDocker(krita.DockWidget):
     def __init__(self):
         super().__init__()
         self.diffusion_controller = DiffusionController()
+        self.native_lineart = NativeLineart()
 
         self.active_document: krita.Document = None
         self.document_nodes_map: dict[QUuid, SystemLayers] = {}
@@ -109,6 +110,23 @@ class DiffusionDrawingDocker(krita.DockWidget):
         self.main_area.layout().addWidget(light_label, 2, 0)
         self.main_area.layout().addWidget(self.light_transfer_toggle, 2, 1)
 
+        self.lineart_options = QWidget(self.main_widget)
+        self.lineart_options.setLayout(QFormLayout())
+        self.main_widget.layout().addWidget(self.lineart_options)
+        self.lineart_strength = QDoubleSpinBox()
+        self.lineart_strength.setRange(0.0, 1.0)
+        self.lineart_strength.setSingleStep(0.05)
+        self.lineart_strength.setValue(0.5)
+        self.lineart_steps = QSpinBox()
+        self.lineart_steps.setRange(1, 20)
+        self.lineart_steps.setValue(1)
+        self.lineart_seed = QSpinBox()
+        self.lineart_seed.setRange(0, 2 ** 31 - 1)
+        self.lineart_seed.setValue(42)
+        self.lineart_options.layout().addRow("Lineart strength", self.lineart_strength)
+        self.lineart_options.layout().addRow("Denoise steps", self.lineart_steps)
+        self.lineart_options.layout().addRow("Seed", self.lineart_seed)
+
         self.log_window = QTextBrowser(self.main_widget)
         self.log_window.setReadOnly(True)
         self.main_widget.layout().addWidget(self.log_window)
@@ -154,6 +172,7 @@ class DiffusionDrawingDocker(krita.DockWidget):
             self.initialize_button.setEnabled(False)
 
         self.gen_lineart_button.setEnabled(False)
+        self.lineart_options.setEnabled(False)
         self.gen_detail_button.setEnabled(False)
         self.lineart_transfer_toggle.setChecked(False)
         self.shadow_transfer_toggle.setChecked(False)
@@ -167,6 +186,7 @@ class DiffusionDrawingDocker(krita.DockWidget):
             self.initialize_button.setEnabled(True)
 
         self.gen_lineart_button.setEnabled(True)
+        self.lineart_options.setEnabled(True)
         self.gen_detail_button.setEnabled(True)
         self.lineart_transfer_toggle.setEnabled(True)
         self.shadow_transfer_toggle.setEnabled(True)
@@ -311,24 +331,45 @@ class DiffusionDrawingDocker(krita.DockWidget):
         self.spawn_future(self.gen_lineart_inner())
 
     async def gen_lineart_inner(self):
-        if self.active_document is None:
+        document = self.active_document
+        if document is None:
             return
 
         try:
             self.disable_buttons()
-            lineart_output_path = os.path.join(
-                self.document_nodes_map[self.active_document.rootNode().uniqueId()].tmp_dir,
-                LINEART_FILE_NAME)
-
-            with tempfile.NamedTemporaryFile(suffix=".png") as scribble_file:
-                with tempfile.NamedTemporaryFile(suffix=".png") as lineart_file:
-                    self.export_image_filtered_color_label([SCRIBBLE_COLOR_LABEL], False, scribble_file.name)
-                    self.export_image_filtered_color_label([LINEART_COLOR_LABEL], True, lineart_file.name)
-
-                    await self.diffusion_controller.scribble_to_line(
-                        scribble_file.name, lineart_file.name, lineart_output_path)
-
-            self.lineart_transfer_toggle.setChecked(False)
+            system_layers = self.document_nodes_map.get(document.rootNode().uniqueId())
+            if system_layers is None:
+                raise RuntimeError("Initialize the document before generating lineart.")
+            width, height = document.width(), document.height()
+            if min(width, height) < 16:
+                raise ValueError("Lineart generation requires an image of at least 16 × 16 pixels.")
+            layer_id = system_layers.lineart
+            output = await self.native_lineart.infer(
+                scribble=capture_bgra(document, SCRIBBLE_COLOR_LABEL),
+                lineart=capture_bgra(document, LINEART_COLOR_LABEL),
+                width=width, height=height,
+                strength=self.lineart_strength.value(), seed=self.lineart_seed.value(),
+                denoise_steps=self.lineart_steps.value(),
+            )
+            if document not in krita.Krita.instance().documents():
+                self.log("The source document was closed; lineart was not applied.")
+                return
+            if (document.width(), document.height()) != (width, height):
+                raise RuntimeError("The image was resized during generation. Generate lineart again.")
+            layer = document.nodeByUniqueID(layer_id)
+            if layer is None:
+                raise RuntimeError("The output layer was removed. Initialize the document again.")
+            layer.setLocked(False)
+            try:
+                if not layer.setColorSpace("RGBA", "U8", SRGB_PROFILE):
+                    raise RuntimeError("Could not prepare the lineart layer for the generated image.")
+                if not layer.setPixelData(QByteArray(output), 0, 0, width, height):
+                    raise RuntimeError("Could not write the generated lineart to its layer.")
+                if not layer.setColorSpace(document.colorModel(), document.colorDepth(), document.colorProfile()):
+                    raise RuntimeError("Could not convert the generated lineart to the document's color space.")
+            finally:
+                layer.setLocked(True)
+            document.refreshProjection()
         finally:
             self.enable_buttons()
 
@@ -417,7 +458,6 @@ class DiffusionDrawingDocker(krita.DockWidget):
             empty_image = os.path.join(os.path.dirname(__file__), EMBEDDED_EMPTY_IMAGE_FILE_NAME)
             tmp_dir = tempfile.mkdtemp(prefix="diffusion_drawing_")
 
-            shutil.copy(empty_image, os.path.join(tmp_dir, LINEART_FILE_NAME))
             shutil.copy(empty_image, os.path.join(tmp_dir, SHADOW_FILE_NAME))
             shutil.copy(empty_image, os.path.join(tmp_dir, LIGHT_FILE_NAME))
 
@@ -428,10 +468,7 @@ class DiffusionDrawingDocker(krita.DockWidget):
         for n in filter(lambda n: n.name().find(DIFFUSION_DRAWING_LAYER_MARKER) != -1, rootNode.childNodes()):
             rootNode.removeChildNode(n)
 
-        lineart_layer = self.active_document.createFileLayer(
-            LINEART_LAYER_NAME,
-            os.path.join(str(system_layers.tmp_dir), LINEART_FILE_NAME),
-            "ToImageSize")
+        lineart_layer = self.active_document.createNode(LINEART_LAYER_NAME, "paintlayer")
         lineart_layer.setOpacity(SYSTEM_LAYER_DEFAULT_OPACITY)
         self.active_document.rootNode().addChildNode(lineart_layer, None)
         lineart_layer.setLocked(True)

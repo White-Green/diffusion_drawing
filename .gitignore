@@ -18,3 +18,8 @@ wheels/
 !/pyproject.toml
 !/README.md
 !/uv.lock
+!/lineartgen
+!/scripts
+!/tests
+/diffusion_drawing/_native/*
+!/diffusion_drawing/_native/__init__.py
