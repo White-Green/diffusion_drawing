@@ -12,6 +12,15 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def write_plugin_zip(staging: Path, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for path in sorted(staging.rglob("*")):
+            # Krita discovers plugins through explicit directory entries.
+            # Files below diffusion_drawing/ alone are not enough.
+            archive.write(path, path.relative_to(staging).as_posix())
+
+
 def package(wheel_dir: Path, output: Path) -> None:
     wheels = sorted(wheel_dir.glob("lineartgen_native-*.whl"))
     if len(wheels) != 1:
@@ -41,11 +50,7 @@ def package(wheel_dir: Path, output: Path) -> None:
         subprocess.run([
             sys.executable, "-B", str(ROOT / "scripts" / "smoke_native.py"), str(plugin),
         ], check=True)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-            for path in sorted(staging.rglob("*")):
-                if path.is_file():
-                    archive.write(path, path.relative_to(staging).as_posix())
+        write_plugin_zip(staging, output)
     print(f"Created {output}")
 
 

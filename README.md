@@ -48,7 +48,13 @@ ZIP に同梱する。Rust ソースやビルドキャッシュ、`.git` は ZIP
 
 GitHub Actions は main・`feat/**` への push、pull request、手動実行で
 Windows x64 のビルドとテストを行い、Artifacts に
-`diffusion-drawing-windows-x64` を保存する。
+`diffusion_drawing-windows-x64.zip` を保存する。
+ダウンロードした ZIP をそのまま Krita にインポートできる。
+CI はアップロード後の ZIP を再ダウンロードして同一性を確認し、
+Krita 5.2.9 の公式インポーターで全ファイルがインストールされることも検証する。
+この検証ではコミットと SHA-256 を固定したインポーターを GitHub から取得する。
+ローカルでも `python scripts/check_krita_import.py dist/diffusion_drawing-windows-x64.zip`
+で確認できる（Krita の GUI は不要）。
 main への push のみ、ビルド成功後に GitHub Release も作成する。
 手動実行や作業ブランチのビルドでは Release は作成しない。
 

@@ -47,11 +47,25 @@ jobs:
           python scripts/package.py --wheel-dir wheels
           --output dist/diffusion_drawing-windows-x64.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: diffusion-drawing-windows-x64
           path: dist/diffusion_drawing-windows-x64.zip
+          archive: false
           if-no-files-found: error
+
+      - name: Download the user-facing artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: diffusion_drawing-windows-x64.zip
+          path: artifact-check
+          skip-decompress: true
+
+      - name: Verify artifact and import with Krita
+        run: |
+          $original = (Get-FileHash dist/diffusion_drawing-windows-x64.zip).Hash
+          $downloaded = (Get-FileHash artifact-check/diffusion_drawing-windows-x64.zip).Hash
+          if ($original -ne $downloaded) { throw 'Downloaded artifact differs from packaged ZIP' }
+          python scripts/check_krita_import.py artifact-check/diffusion_drawing-windows-x64.zip
 
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -61,10 +75,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          name: diffusion-drawing-windows-x64
+          name: diffusion_drawing-windows-x64.zip
           path: dist
+          skip-decompress: true
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
