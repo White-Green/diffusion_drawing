@@ -351,6 +351,7 @@ class DiffusionDrawingDocker(krita.DockWidget):
                 strength=self.lineart_strength.value(), seed=self.lineart_seed.value(),
                 denoise_steps=self.lineart_steps.value(),
             )
+            self.log(f"Lineart backend: {self.native_lineart.backend_description}")
             if document not in krita.Krita.instance().documents():
                 self.log("The source document was closed; lineart was not applied.")
                 return

@@ -26,14 +26,14 @@ jobs:
       - name: Test plugin integration
         run: python -m unittest discover -s tests -v
 
-      - name: Build embedded CPU inference extension
+      - name: Build embedded wgpu inference extension
         uses: PyO3/maturin-action@v1
         with:
           maturin-version: v1.15.0
           rust-toolchain: stable
           target: x86_64-pc-windows-msvc
           args: >-
-            --release --locked
+            --release --locked --no-default-features --features wgpu
             --manifest-path lineartgen/crates/lineartgen-native/Cargo.toml
             --out wheels
 

@@ -85,14 +85,16 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_load_and_inference_run_off_ui_thread_and_reuse_model(self):
         main_thread = threading.get_ident()
         threads = []
-        model = Mock()
+        model = Mock(backend="wgpu", device="Test GPU (DiscreteGpu, Dx12)")
         model.infer.side_effect = lambda **inputs: (threads.append(threading.get_ident()), b"result")[1]
         factory = Mock(side_effect=lambda: (threads.append(threading.get_ident()), model)[1])
         inputs = dict(scribble=b"s", lineart=b"l", width=16, height=16, strength=0.5, seed=42, denoise_steps=2)
         worker = native_lineart.NativeLineart()
+        self.assertIsNone(worker.backend_description)
         with patch.object(native_lineart.importlib, "import_module", return_value=types.SimpleNamespace(LineartModel=factory)):
             results = await asyncio.gather(worker.infer(**inputs), worker.infer(**inputs))
         self.assertEqual(results, [b"result", b"result"])
+        self.assertEqual(worker.backend_description, "wgpu: Test GPU (DiscreteGpu, Dx12)")
         factory.assert_called_once()
         model.infer.assert_called_with(**inputs)
         self.assertTrue(all(thread != main_thread for thread in threads))

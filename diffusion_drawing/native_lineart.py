@@ -42,6 +42,12 @@ class NativeLineart:
         self._model = None
         self._lock = threading.Lock()
 
+    @property
+    def backend_description(self) -> str | None:
+        if self._model is None:
+            return None
+        return f"{self._model.backend}: {self._model.device}"
+
     async def infer(self, *, scribble: bytes, lineart: bytes, width: int, height: int,
                     strength: float, seed: int, denoise_steps: int) -> bytes:
         return await asyncio.to_thread(
