@@ -11,33 +11,11 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-
-      - name: Checkout public controller submodule
-        run: git submodule update --init --recursive -- diffusion_drawing/diffusion_controller
-
-      - name: Read pinned lineartgen commit
-        id: lineartgen-ref
-        shell: pwsh
-        run: |
-          $entry = git ls-tree HEAD lineartgen
-          if ($LASTEXITCODE -ne 0 -or $entry -notmatch '^160000 commit ([0-9a-f]{40})\s+lineartgen$') {
-            throw 'lineartgen must be pinned as a submodule'
-          }
-          "sha=$($Matches[1])" >> $env:GITHUB_OUTPUT
-
-      - name: Checkout private lineartgen submodule
-        uses: actions/checkout@v4
-        with:
-          repository: White-Green/lineartgen
-          ref: ${{ steps.lineartgen-ref.outputs.sha }}
-          path: lineartgen
-          ssh-key: ${{ secrets.LINEARTGEN_DEPLOY_KEY }}
+          submodules: recursive
           persist-credentials: false
 
       - uses: actions/setup-python@v6
