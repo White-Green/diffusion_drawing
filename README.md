@@ -52,6 +52,13 @@ Windows x64 のビルドとテストを行い、Artifacts に
 main への push のみ、ビルド成功後に GitHub Release も作成する。
 手動実行や作業ブランチのビルドでは Release は作成しない。
 
+lineartgen は非公開リポジトリのため、CI の取得には専用の読み取り専用
+Deploy Key を使う。公開鍵を lineartgen の Deploy keys に書き込み権限なしで登録し、
+秘密鍵を diffusion_drawing の Actions Secret `LINEARTGEN_DEPLOY_KEY` に設定する。
+個人の GitHub トークンは CI に保存しない。キーは lineartgen の checkout のみで使い、
+ビルド時の Git 設定には残さない。Secret を利用できない fork 由来の PR では
+Windows ビルドを実行しない。
+
 ### lineartgen の更新
 
 1. lineartgen 側で変更を commit して **先に push** する。
