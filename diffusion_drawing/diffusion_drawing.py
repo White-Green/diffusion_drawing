@@ -51,6 +51,8 @@ class DiffusionDrawingDocker(krita.DockWidget):
         super().__init__()
         self.diffusion_controller = DiffusionController()
         self.native_lineart = NativeLineart()
+        self._lineart_task = None
+        self._lineart_generation = 0
 
         self.active_document: krita.Document = None
         self.document_nodes_map: dict[QUuid, SystemLayers] = {}
@@ -82,7 +84,9 @@ class DiffusionDrawingDocker(krita.DockWidget):
         self.lineart_transfer_toggle.stateChanged.connect(
             lambda state: self.handle_lineart_transfer(state == Qt.Checked))
         self.gen_lineart_button = QPushButton("Gen")
-        self.gen_lineart_button.clicked.connect(self.gen_lineart)
+        self.gen_lineart_button.setCheckable(True)
+        self.gen_lineart_button.setToolTip("Generate and update lineart continuously while enabled.")
+        self.gen_lineart_button.toggled.connect(self.gen_lineart)
 
         # row=0にlineart関連を配置
         self.main_area.layout().addWidget(lineart_label, 0, 0)
@@ -167,12 +171,12 @@ class DiffusionDrawingDocker(krita.DockWidget):
         self.setup_area.layout().addWidget(self.initialize_button)
         self.initialize_button.clicked.connect(self.initialize_document)
 
-    def disable_buttons(self):
+    def disable_buttons(self, *, keep_lineart_controls=False):
         if self.initialize_button is not None:
             self.initialize_button.setEnabled(False)
 
-        self.gen_lineart_button.setEnabled(False)
-        self.lineart_options.setEnabled(False)
+        self.gen_lineart_button.setEnabled(keep_lineart_controls)
+        self.lineart_options.setEnabled(keep_lineart_controls)
         self.gen_detail_button.setEnabled(False)
         self.lineart_transfer_toggle.setChecked(False)
         self.shadow_transfer_toggle.setChecked(False)
@@ -326,53 +330,78 @@ class DiffusionDrawingDocker(krita.DockWidget):
             self.active_document.setActiveNode(active_node)
 
     @pyqtSlot(bool)
-    def gen_lineart(self):
-        self.log("gen_lineart")
-        self.spawn_future(self.gen_lineart_inner())
+    def gen_lineart(self, checked: bool):
+        self._lineart_generation += 1
+        self.log(f"gen_lineart {'ON' if checked else 'OFF'}")
+        if checked and self._lineart_task is None:
+            self.disable_buttons(keep_lineart_controls=True)
+            self._lineart_task = self.spawn_future(self.gen_lineart_loop())
 
-    async def gen_lineart_inner(self):
-        document = self.active_document
-        if document is None:
-            return
-
+    async def gen_lineart_loop(self):
+        reported_backend = False
         try:
-            self.disable_buttons()
-            system_layers = self.document_nodes_map.get(document.rootNode().uniqueId())
-            if system_layers is None:
-                raise RuntimeError("Initialize the document before generating lineart.")
-            width, height = document.width(), document.height()
-            if min(width, height) < 16:
-                raise ValueError("Lineart generation requires an image of at least 16 × 16 pixels.")
-            layer_id = system_layers.lineart
-            output = await self.native_lineart.infer(
-                scribble=capture_bgra(document, SCRIBBLE_COLOR_LABEL),
-                lineart=capture_bgra(document, LINEART_COLOR_LABEL),
-                width=width, height=height,
-                strength=self.lineart_strength.value(), seed=self.lineart_seed.value(),
-                denoise_steps=self.lineart_steps.value(),
-            )
-            self.log(f"Lineart backend: {self.native_lineart.backend_description}")
-            if document not in krita.Krita.instance().documents():
-                self.log("The source document was closed; lineart was not applied.")
-                return
-            if (document.width(), document.height()) != (width, height):
-                raise RuntimeError("The image was resized during generation. Generate lineart again.")
-            layer = document.nodeByUniqueID(layer_id)
-            if layer is None:
-                raise RuntimeError("The output layer was removed. Initialize the document again.")
-            layer.setLocked(False)
-            try:
-                if not layer.setColorSpace("RGBA", "U8", SRGB_PROFILE):
-                    raise RuntimeError("Could not prepare the lineart layer for the generated image.")
-                if not layer.setPixelData(QByteArray(output), 0, 0, width, height):
-                    raise RuntimeError("Could not write the generated lineart to its layer.")
-                if not layer.setColorSpace(document.colorModel(), document.colorDepth(), document.colorProfile()):
-                    raise RuntimeError("Could not convert the generated lineart to the document's color space.")
-            finally:
-                layer.setLocked(True)
-            document.refreshProjection()
+            while self.gen_lineart_button.isChecked():
+                if not await self.gen_lineart_inner():
+                    break
+                if not reported_backend:
+                    self.log(f"Lineart backend: {self.native_lineart.backend_description}")
+                    reported_backend = True
+                # Give Qt a chance to paint and handle input before the next capture.
+                # There is deliberately no drawing/change detection or debounce.
+                await asyncio.sleep(0)
         finally:
+            self._lineart_task = None
+            self.gen_lineart_button.setChecked(False)
             self.enable_buttons()
+
+    async def gen_lineart_inner(self) -> bool:
+        document = self.active_document
+        generation = self._lineart_generation
+        if document is None or document not in krita.Krita.instance().documents():
+            return False
+
+        system_layers = self.document_nodes_map.get(document.rootNode().uniqueId())
+        if system_layers is None:
+            raise RuntimeError("Initialize the document before generating lineart.")
+        width, height = document.width(), document.height()
+        if min(width, height) < 16:
+            raise ValueError("Lineart generation requires an image of at least 16 × 16 pixels.")
+        layer_id = system_layers.lineart
+        output = await self.native_lineart.infer(
+            scribble=capture_bgra(document, SCRIBBLE_COLOR_LABEL),
+            lineart=capture_bgra(document, LINEART_COLOR_LABEL),
+            width=width, height=height,
+            strength=self.lineart_strength.value(), seed=self.lineart_seed.value(),
+            denoise_steps=self.lineart_steps.value(),
+        )
+        # OFF/ON can happen while the native worker is still running. Finish that
+        # inference before starting another, but never apply its obsolete result.
+        if not self.gen_lineart_button.isChecked():
+            return False
+        if generation != self._lineart_generation:
+            return True
+        if document != self.active_document:
+            return False
+        if document not in krita.Krita.instance().documents():
+            self.log("The source document was closed; lineart was not applied.")
+            return False
+        if (document.width(), document.height()) != (width, height):
+            raise RuntimeError("The image was resized during generation. Generate lineart again.")
+        layer = document.nodeByUniqueID(layer_id)
+        if layer is None:
+            raise RuntimeError("The output layer was removed. Initialize the document again.")
+        layer.setLocked(False)
+        try:
+            if not layer.setColorSpace("RGBA", "U8", SRGB_PROFILE):
+                raise RuntimeError("Could not prepare the lineart layer for the generated image.")
+            if not layer.setPixelData(QByteArray(output), 0, 0, width, height):
+                raise RuntimeError("Could not write the generated lineart to its layer.")
+            if not layer.setColorSpace(document.colorModel(), document.colorDepth(), document.colorProfile()):
+                raise RuntimeError("Could not convert the generated lineart to the document's color space.")
+        finally:
+            layer.setLocked(True)
+        document.refreshProjection()
+        return True
 
     def handle_shadow_transfer(self, transfer: bool):
         self.apply_layer_mask_filtered_color_label([SHADOW_COLOR_LABEL])
@@ -507,7 +536,7 @@ class DiffusionDrawingDocker(krita.DockWidget):
                 traceback_str = traceback.format_exc()
                 self.log(traceback_str)
 
-        asyncio.ensure_future(wrapper())
+        return asyncio.ensure_future(wrapper())
 
     # メインで開いているドキュメントが変わったときには呼ばれるらしい
     # @override
@@ -517,6 +546,7 @@ class DiffusionDrawingDocker(krita.DockWidget):
         if active_document == self.active_document:
             return
 
+        self.gen_lineart_button.setChecked(False)
         self.active_document = active_document
 
         if self.active_document is None:
