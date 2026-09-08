@@ -1,4 +1,4 @@
-"""Exercise the packaged extension without importing Krita or PyQt."""
+"""Exercise the complete packaged ONNX runtime without importing Krita or PyQt."""
 
 import asyncio
 import importlib
@@ -7,14 +7,12 @@ import sys
 import types
 
 
-async def smoke(plugin: Path) -> None:
+async def smoke(plugin: Path, provider: str = "cpu") -> None:
     package_name = "_diffusion_drawing_smoke"
     package = types.ModuleType(package_name)
     package.__path__ = [str(plugin.resolve())]
     sys.modules[package_name] = package
     integration = importlib.import_module(f"{package_name}.native_lineart")
-    native = importlib.import_module(f"{package_name}._native.lineartgen_native")
-    assert native.BACKEND == "wgpu", f"Expected wgpu wheel, got {native.BACKEND}"
     model = integration.NativeLineart()
     width, height = 33, 17
     scribble = bytearray(width * height * 4)
@@ -27,6 +25,12 @@ async def smoke(plugin: Path) -> None:
     )
     first = await model.infer(**options)
     print(f"Bundled model backend: {model.backend_description}", flush=True)
+    assert "onnxruntime" in model.backend_description
+    if provider == "directml":
+        assert "DmlExecutionProvider" in model.backend_description
+    assert "jax" not in sys.modules and "flax" not in sys.modules
+    for dependency in ("numpy", "onnxruntime", "lineartgen_runtime"):
+        assert Path(sys.modules[dependency].__file__).is_relative_to(plugin / "_native"), dependency
     repeated = await model.infer(**options)
     assert isinstance(first, bytes)
     assert len(first) == width * height * 4
@@ -50,8 +54,8 @@ async def smoke(plugin: Path) -> None:
             pass
         else:
             raise AssertionError(f"Invalid input was accepted: {invalid}")
-    print("Bundled wgpu model: import, inference, alpha-only scribble, padding, recursion, fixed seed and validation passed")
+    print("Bundled ONNX model: import, inference, alpha-only scribble, padding, recursion, fixed seed and validation passed")
 
 
 if __name__ == "__main__":
-    asyncio.run(smoke(Path(sys.argv[1])))
+    asyncio.run(smoke(Path(sys.argv[1]).resolve(), sys.argv[2] if len(sys.argv) > 2 else "cpu"))

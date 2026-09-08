@@ -12,10 +12,11 @@
 ### Krita Plugin
 [Releases](https://github.com/White-Green/diffusion_drawing/releases/latest) から
 `diffusion_drawing-windows-x64.zip` をダウンロードし、Krita の Python プラグイン
-インポーターで読み込む。Windows x64、CPython 3.10 以降を組み込んだ Krita が対象。
+インポーターで読み込む。Windows x64、CPython 3.10 を組み込んだ Krita が対象。別の Python minor 版ではその版向けに ZIP をビルドする。
 
-lineart の Gen は、同梱された lineartgen のモデルを wgpu バックエンドで推論する。
-Windows では DirectX 12 を使い、利用可能な高性能 GPU を優先して選択する。
+lineart の Gen は、同梱された ONNX モデルを ONNX Runtime で推論する。
+Windows ZIP では DirectML（DirectX 12、既定の GPU）を優先し、CPU provider も利用できる。
+学習コードは JAX / Flax NNX で、Krita には JAX を同梱しない。
 lineart の **Gen はトグル**で、ON にすると一度生成し、その後は描画が止まってから更新する。
 ペン／マウスを離して約 250ms 待ち、続けて描き始めた場合は待ち直す。
 押したまま停止している間や、Krita がストロークを処理している間は入力取得・生成を開始しない。
@@ -26,10 +27,10 @@ Gen を OFF にすると更新を止める。実行中の推論は完了まで�
 ドキュメント切り替え・クローズ・エラー時にも自動的に OFF になる。
 Strength・Denoise steps・Seed は ON のまま変更でき、変更が止まってから再生成する。
 Transfer や shadow / light 生成を使うときは Gen を OFF にして実行中の推論の完了を待つ。
-生成後のログに `Lineart backend: wgpu: デバイス名 (種別, Dx12)` を表示する。
-初回生成には GPU 初期化とシェーダーのコンパイル時間がかかる。
+生成後のログに `Lineart backend: onnxruntime: DmlExecutionProvider, CPUExecutionProvider` を表示する。
+初回生成には ONNX セッションと GPU の初期化時間がかかる。
 ZIP 更新時は Krita を再起動し、Gen を押す前に上書きインポートする。
-インポート後にもう一度 Krita を再起動して、新しい拡張を読み込む。
+インポート後にもう一度 Krita を再起動して、新しいランタイムを読み込む。
 線画生成には ComfyUI、Python パッケージの追加インストール、モデルのダウンロードは不要。
 scribble（カラーラベル 1）と描き途中の線画（カラーラベル 2）を使い、
 結果は専用の描画レイヤーに反映する。Strength、Denoise steps（1〜20）、Seed は
@@ -47,40 +48,48 @@ Krita の整数 RGBA のチャンネル順序については
 
 ## Windows x64 ビルド
 
-このリポジトリは `lineartgen/` に Rust ソースを submodule として保持する。
-通常の利用者は配布 ZIP だけでよく、以下は開発者向けの手順。
+`lineartgen/` submodule の JAX rewrite を使う。学習とモデル変更の手順は
+その README を参照。配布に必要なのは `packages/lineartgen-runtime` のみ。
+Python は配布先 Krita の minor 版と一致させる（CI は 3.10 x64）。
 
 ```powershell
-git clone --recurse-submodules https://github.com/White-Green/diffusion_drawing.git
-cd diffusion_drawing
-python -m pip install "maturin>=1.15,<2"
-python -m maturin build --release --locked --no-default-features --features wgpu --target x86_64-pc-windows-msvc --manifest-path lineartgen/crates/lineartgen-native/Cargo.toml --out wheels
+git submodule update --init --recursive
+uv build --project lineartgen/packages/lineartgen-runtime --wheel --out-dir wheels
+uv export --project lineartgen/packages/lineartgen-runtime --frozen --extra directml --no-dev --no-emit-project --output-file runtime-requirements.txt
+python -m pip download --only-binary=:all: --dest wheels --require-hashes -r runtime-requirements.txt
+python -m pip install PyQt5==5.15.11
 python -m unittest discover -s tests -v
-python scripts/package.py --wheel-dir wheels --output dist/diffusion_drawing-windows-x64.zip
+python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-windows-x64.zip
 ```
 
-64-bit CPython 3.10 以降、Rust、および Visual Studio の C++ ビルドツールが必要。
-既存 checkout では先に `git submodule update --init --recursive` を実行する。
-`wheels/` には対象環境向けの lineartgen-native wheel を1つだけ置く。
-`package.py` は一時ディレクトリへ拡張をインストールして実モデルの推論を検証し、
-ZIP に同梱する。Rust ソースやビルドキャッシュ、`.git` は ZIP に含めない。
+uv、対象 Python と pip が必要。`wheels/` は空のディレクトリから始める。
+`package.py` は wheelhouse から依存関係込みで一時領域へインストールし、
+モデル推論を実行してから ZIP 化する。ONNX、NumPy、ONNX Runtime と各ライセンスを同梱する。
+ランタイム自体は pure Python wheel だが、NumPy と ORT は OS・CPU・Python minor に依存する。
+ZIP 内の `runtime.json` に対象版を記録し、不一致はモデル読み込み前に通知する。
 
-GitHub Actions は main・`feat/**` への push、pull request、手動実行で
-Windows x64 のビルドとテストを行い、Artifacts に
-`diffusion_drawing-windows-x64.zip` を保存する。
-ダウンロードした ZIP をそのまま Krita にインポートできる。
-CI はアップロード後の ZIP を再ダウンロードして同一性を確認し、
-Krita 5.2.9 の公式インポーターで全ファイルがインストールされることも検証する。
-CI の推論テストでは wgpu を使っていることと、パディング・再帰処理・固定 Seed を検証する。
-CI ランナーでソフトウェアアダプターが選ばれた場合、実 GPU での動作・速度は別途確認する。
-この検証ではコミットと SHA-256 を固定したインポーターを GitHub から取得する。
-ローカルでも `python scripts/check_krita_import.py dist/diffusion_drawing-windows-x64.zip`
-で確認できる（Krita の GUI は不要）。
-main への push のみ、ビルド成功後に GitHub Release も作成する。
-手動実行や作業ブランチのビルドでは Release は作成しない。
+Linux の CPU パッケージでは export の extra と package の provider を `cpu` に変える。
+Windows DirectML の依存解決・推論確認は Windows 上で実行する。
+Python 3.10 では実際に対応 wheel のある ORT CPU 1.23.2 / DirectML 1.22.0 を固定している。
+CPU と DirectML を同じ環境へ両方インストールしない（同じ import 名を使う）。
 
-lineartgen は公開リポジトリとして、通常の recursive submodule checkout で取得する。
-追加の Deploy Key や Actions Secret は不要。
+同梱モデルは既存 epoch 1500 重みを Python で変換したもの。
+新しく学習したモデルは lineartgen の export コマンドで
+`packages/lineartgen-runtime/src/lineartgen_runtime/assets/model.onnx` に書き出して再ビルドする。
+入出力・操作は維持するが、乱数生成器と実行 backend が変わるため旧版と同じ Seed の出力は一致しない。
+
+GitHub Actions は main・`feat/**`・`rewrite/**` への push、PR、手動実行で
+Windows ZIP をビルドし、同梱された依存関係だけで推論できること、DirectML provider、
+パディング・再帰・固定 Seed・入力検証を確認する。
+Artifacts からの再ダウンロード後、従来通り Krita 5.2.9 の公式インポーターでも検証する。
+ローカルでは次を使う（Qt が必要、Krita GUI は不要）。
+
+```powershell
+python scripts/check_krita_import.py dist/diffusion_drawing-windows-x64.zip
+```
+
+main への push だけが Release を作る。作業ブランチでは Release を作らない。
+この rewrite のローカル検証結果は lineartgen の `docs/validation.md` に記録する。
 
 ### lineartgen の更新
 

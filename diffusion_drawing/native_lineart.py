@@ -2,6 +2,9 @@
 
 import asyncio
 import importlib
+import json
+from pathlib import Path
+import sys
 import threading
 
 
@@ -59,11 +62,22 @@ class NativeLineart:
         with self._lock:
             if self._model is None:
                 try:
-                    native = importlib.import_module("._native.lineartgen_native", __package__)
+                    bundled = Path(__file__).parent / "_native"
+                    manifest = bundled / "runtime.json"
+                    if manifest.is_file():
+                        expected = json.loads(manifest.read_text())["python"]
+                        if list(sys.version_info[:2]) != expected:
+                            raise RuntimeError(
+                                f"This ZIP requires Krita with Python {'.'.join(map(str, expected))}; "
+                                f"this Krita uses {sys.version_info.major}.{sys.version_info.minor}."
+                            )
+                    if str(bundled) not in sys.path:
+                        sys.path.insert(0, str(bundled))
+                    native = importlib.import_module("lineartgen_runtime")
+                    self._model = native.LineartModel()
                 except (ImportError, OSError) as error:
                     raise RuntimeError(
                         "Could not load lineart generation. Install the Diffusion Drawing ZIP "
-                        "for your operating system and CPU architecture (Python 3.10 or later)."
+                        "for your operating system, CPU architecture and Krita Python version."
                     ) from error
-                self._model = native.LineartModel()
             return self._model.infer(**inputs)

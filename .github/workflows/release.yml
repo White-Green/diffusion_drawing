@@ -2,7 +2,7 @@ name: Build Windows plugin
 
 on:
   push:
-    branches: [main, 'feat/**']
+    branches: [main, 'feat/**', 'rewrite/**']
   pull_request:
   workflow_dispatch:
 
@@ -23,30 +23,25 @@ jobs:
           python-version: '3.10'
           architecture: x64
 
+      - uses: astral-sh/setup-uv@v6
+
       - name: Install Qt for input event tests
         run: python -m pip install PyQt5==5.15.11
       - name: Test plugin integration
         run: python -m unittest discover -s tests -v
 
-      - name: Build embedded wgpu inference extension
-        uses: PyO3/maturin-action@v1
-        with:
-          maturin-version: v1.15.0
-          rust-toolchain: stable
-          target: x86_64-pc-windows-msvc
-          args: >-
-            --release --locked --no-default-features --features wgpu
-            --manifest-path lineartgen/crates/lineartgen-native/Cargo.toml
-            --out wheels
+      - name: Build pure Python ONNX runtime package
+        run: uv build --project lineartgen/packages/lineartgen-runtime --wheel --out-dir wheels
 
-      - name: Test inference library
-        run: >-
-          cargo test --release --locked --manifest-path lineartgen/Cargo.toml
-          -p lineartgen --no-default-features --features inference-flex --lib
+      - name: Download locked Python 3.10 DirectML dependencies
+        run: |
+          uv export --project lineartgen/packages/lineartgen-runtime --frozen --extra directml --no-dev --no-emit-project --output-file runtime-requirements.txt
+          python -m pip download --only-binary=:all: --dest wheels --require-hashes -r runtime-requirements.txt
 
       - name: Package and smoke-test bundled model
         run: >-
           python scripts/package.py --wheel-dir wheels
+          --provider directml
           --output dist/diffusion_drawing-windows-x64.zip
 
       - uses: actions/upload-artifact@v7

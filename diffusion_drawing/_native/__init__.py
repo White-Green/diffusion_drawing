@@ -1,1 +1,1 @@
-"""Platform-specific lineartgen extension, bundled during packaging."""
+"""Bundled lineartgen runtime, ONNX model and platform-specific dependencies."""

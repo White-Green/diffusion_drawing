@@ -85,7 +85,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_load_and_inference_run_off_ui_thread_and_reuse_model(self):
         main_thread = threading.get_ident()
         threads = []
-        model = Mock(backend="wgpu", device="Test GPU (DiscreteGpu, Dx12)")
+        model = Mock(backend="onnxruntime", device="DmlExecutionProvider")
         model.infer.side_effect = lambda **inputs: (threads.append(threading.get_ident()), b"result")[1]
         factory = Mock(side_effect=lambda: (threads.append(threading.get_ident()), model)[1])
         inputs = dict(scribble=b"s", lineart=b"l", width=16, height=16, strength=0.5, seed=42, denoise_steps=2)
@@ -94,7 +94,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(native_lineart.importlib, "import_module", return_value=types.SimpleNamespace(LineartModel=factory)):
             results = await asyncio.gather(worker.infer(**inputs), worker.infer(**inputs))
         self.assertEqual(results, [b"result", b"result"])
-        self.assertEqual(worker.backend_description, "wgpu: Test GPU (DiscreteGpu, Dx12)")
+        self.assertEqual(worker.backend_description, "onnxruntime: DmlExecutionProvider")
         factory.assert_called_once()
         model.infer.assert_called_with(**inputs)
         self.assertTrue(all(thread != main_thread for thread in threads))
@@ -102,7 +102,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_extension_produces_actionable_error(self):
         worker = native_lineart.NativeLineart()
         with patch.object(native_lineart.importlib, "import_module", side_effect=ImportError("missing")):
-            with self.assertRaisesRegex(RuntimeError, "operating system and CPU architecture"):
+            with self.assertRaisesRegex(RuntimeError, "operating system, CPU architecture"):
                 await worker.infer(scribble=b"", lineart=b"", width=16, height=16,
                                    strength=0.5, seed=0, denoise_steps=1)
 
@@ -166,7 +166,7 @@ class ApplyTests(unittest.IsolatedAsyncioTestCase):
         docker.lineart_seed = Mock(value=Mock(return_value=42))
         docker.lineart_steps = Mock(value=Mock(return_value=1))
         docker.native_lineart = Mock(infer=AsyncMock(return_value=bytes(16 * 16 * 4)),
-                                     backend_description="wgpu: Test GPU")
+                                     backend_description="onnxruntime: DmlExecutionProvider")
         docker.setup_area_none, docker.setup_area_ready, docker.setup_area_initialize = Mock(), Mock(), Mock()
         self.ui.krita.Krita.instance().documents.return_value = [document]
         self.addCleanup(lambda: docker.document_nodes_map.clear())
