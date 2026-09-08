@@ -112,13 +112,7 @@ def load_docker():
     for name in ["DockWidget", "Node", "Document", "Canvas"]:
         setattr(krita, name, type(name, (), {}))
     krita.Krita = Mock()
-    qtcore = types.ModuleType("PyQt5.QtCore")
-    qtcore.QUuid = type("QUuid", (), {})
-    qtcore.QByteArray = bytes
-    qtcore.pyqtSlot = lambda *args: lambda method: method
-    modules = {"krita": krita, "PyQt5": types.ModuleType("PyQt5"),
-               "PyQt5.QtCore": qtcore, "PyQt5.QtWidgets": types.ModuleType("PyQt5.QtWidgets")}
-    with patch.dict(sys.modules, modules):
+    with patch.dict(sys.modules, {"krita": krita}):
         return importlib.import_module(f"{PACKAGE}.diffusion_drawing")
 
 
@@ -161,6 +155,10 @@ class ApplyTests(unittest.IsolatedAsyncioTestCase):
         docker.active_document = document
         docker._lineart_task = None
         docker._lineart_generation = 0
+        docker._lineart_pending = False
+        docker._lineart_deadline = 0.0
+        docker._last_lineart_input = None
+        docker._lineart_activity = Mock(busy=False)
         docker.gen_lineart_button = Toggle(True, docker.gen_lineart)
         docker.document_nodes_map = {"original-document": types.SimpleNamespace(lineart="original-layer", tmp_dir="")}
         docker.disable_buttons, docker.enable_buttons, docker.log = Mock(), Mock(), Mock()
@@ -234,28 +232,100 @@ class ApplyTests(unittest.IsolatedAsyncioTestCase):
         docker.gen_lineart_button.setChecked(True)
         return docker._lineart_task
 
-    async def test_unchanged_input_is_generated_and_applied_repeatedly(self):
+    async def wait_until(self, predicate):
+        async def poll():
+            while not predicate():
+                await asyncio.sleep(0.01)
+        await asyncio.wait_for(poll(), 2)
+
+    async def test_idle_does_not_capture_and_unchanged_input_does_not_regenerate(self):
         docker, document, layer = self.make_docker()
-        document.modified.return_value = False
-
-        def apply(*args):
-            if layer.setPixelData.call_count == 3:
-                docker.gen_lineart_button.setChecked(False)
-            return True
-
-        layer.setPixelData.side_effect = apply
         with patch.object(self.ui, "capture_bgra", return_value=bytes(16 * 16 * 4)) as capture:
             task = self.start_loop(docker)
+            await self.wait_until(lambda: layer.setPixelData.call_count == 1)
+            await asyncio.sleep(0.35)
+            self.assertEqual(capture.call_count, 2)
+            docker.request_lineart_update()  # e.g. a layer selection or zoom, same pixels
+            await self.wait_until(lambda: capture.call_count == 4)
+            self.assertEqual(docker.native_lineart.infer.await_count, 1)
+            self.assertEqual(layer.setPixelData.call_count, 1)
+            docker.gen_lineart_button.setChecked(False)
             await asyncio.wait_for(task, 2)
-        self.assertEqual(docker.native_lineart.infer.await_count, 3)
-        self.assertEqual(layer.setPixelData.call_count, 3)
-        self.assertEqual(capture.call_count, 6)
         document.modified.assert_not_called()
         docker.disable_buttons.assert_called_once_with(keep_lineart_controls=True)
         docker.enable_buttons.assert_called_once()
-        self.assertIsNone(docker._lineart_task)
-        backend_logs = [call for call in docker.log.call_args_list if "Lineart backend" in str(call)]
-        self.assertEqual(len(backend_logs), 1)
+
+    async def test_stroke_held_still_and_rapid_strokes_wait_before_capture(self):
+        docker, document, layer = self.make_docker()
+        with patch.object(self.ui, "capture_bgra", return_value=bytes(16 * 16 * 4)) as capture:
+            task = self.start_loop(docker)
+            docker._lineart_activity.busy = True
+            docker.request_lineart_update()
+            await asyncio.sleep(0.35)
+            capture.assert_not_called()
+            docker._lineart_activity.busy = False
+            docker.request_lineart_update()  # release
+            await asyncio.sleep(0.15)
+            docker.request_lineart_update()  # another short stroke
+            await asyncio.sleep(0.15)
+            capture.assert_not_called()
+            await self.wait_until(lambda: layer.setPixelData.call_count == 1)
+            docker.gen_lineart_button.setChecked(False)
+            await asyncio.wait_for(task, 2)
+        self.assertEqual(docker.native_lineart.infer.await_count, 1)
+
+    async def test_brush_jobs_finish_before_capture_and_settings_trigger_regeneration(self):
+        docker, document, layer = self.make_docker()
+        document.tryBarrierLock.return_value = False
+        with patch.object(self.ui, "capture_bgra", return_value=bytes(16 * 16 * 4)) as capture:
+            task = self.start_loop(docker)
+            await asyncio.sleep(0.35)
+            capture.assert_not_called()
+            document.unlock.assert_not_called()
+            document.tryBarrierLock.return_value = True
+            await self.wait_until(lambda: layer.setPixelData.call_count == 1)
+            docker.lineart_seed.value.return_value = 123
+            docker.request_lineart_update()
+            await self.wait_until(lambda: layer.setPixelData.call_count == 2)
+            self.assertEqual(docker.native_lineart.infer.call_args.kwargs["seed"], 123)
+            docker.gen_lineart_button.setChecked(False)
+            await asyncio.wait_for(task, 2)
+
+    async def test_new_stroke_discards_inflight_result_and_uses_latest_pixels(self):
+        docker, document, layer = self.make_docker()
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def infer(**inputs):
+            entered.set()
+            await release.wait()
+            return bytes(16 * 16 * 4)
+        docker.native_lineart.infer.side_effect = infer
+        with patch.object(self.ui, "capture_bgra", return_value=bytes(16 * 16 * 4)) as capture:
+            task = self.start_loop(docker)
+            await asyncio.wait_for(entered.wait(), 2)
+            docker._lineart_activity.busy = True
+            docker.request_lineart_update()
+            release.set()
+            await asyncio.sleep(0.35)
+            layer.setPixelData.assert_not_called()
+            self.assertEqual(capture.call_count, 2)
+            latest = bytes([1, 2, 3, 255]) * 16 * 16
+            capture.return_value = latest
+            docker._lineart_activity.busy = False
+            docker.request_lineart_update()
+            await self.wait_until(lambda: layer.setPixelData.call_count == 1)
+            self.assertEqual(docker.native_lineart.infer.await_count, 2)
+            self.assertEqual(docker.native_lineart.infer.call_args.kwargs["scribble"], latest)
+            docker.gen_lineart_button.setChecked(False)
+            await asyncio.wait_for(task, 2)
+
+    async def test_off_during_debounce_does_not_capture(self):
+        docker, document, layer = self.make_docker()
+        with patch.object(self.ui, "capture_bgra") as capture:
+            task = self.start_loop(docker)
+            await asyncio.sleep(0.05)
+            docker.gen_lineart_button.setChecked(False)
+            await asyncio.wait_for(task, 2)
+            capture.assert_not_called()
 
     async def test_off_during_inference_discards_result_and_stops(self):
         docker, document, layer = self.make_docker()
@@ -366,7 +436,7 @@ class ApplyTests(unittest.IsolatedAsyncioTestCase):
         other_layer.setPixelData.assert_called_once()
         other_document.nodeByUniqueID.assert_called_once_with("other-layer")
 
-    def test_continuous_generation_leaves_stop_and_options_enabled(self):
+    def test_auto_generation_leaves_stop_and_options_enabled(self):
         docker, document, layer = self.make_docker()
         for name in ("initialize_button", "lineart_options", "gen_detail_button",
                      "lineart_transfer_toggle", "shadow_transfer_toggle", "light_transfer_toggle"):

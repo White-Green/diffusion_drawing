@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import os
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Coroutine
 
@@ -11,6 +13,7 @@ from PyQt5.QtWidgets import *
 
 from .diffusion_controller import DiffusionController
 from .native_lineart import NativeLineart, SRGB_PROFILE, capture_bgra
+from .lineart_activity import LineartActivity
 
 EMBEDDED_EMPTY_IMAGE_FILE_NAME = "empty.png"
 
@@ -22,6 +25,7 @@ LIGHT_LAYER_NAME = f"light{DIFFUSION_DRAWING_LAYER_MARKER}"
 SHADOW_FILE_NAME = "shadow.png"
 LIGHT_FILE_NAME = "light.png"
 
+LINEART_IDLE_SECONDS = 0.25
 SYSTEM_LAYER_DEFAULT_OPACITY = 127
 
 SCRIBBLE_COLOR_LABEL = 1
@@ -53,6 +57,9 @@ class DiffusionDrawingDocker(krita.DockWidget):
         self.native_lineart = NativeLineart()
         self._lineart_task = None
         self._lineart_generation = 0
+        self._lineart_pending = False
+        self._lineart_deadline = 0.0
+        self._last_lineart_input = None
 
         self.active_document: krita.Document = None
         self.document_nodes_map: dict[QUuid, SystemLayers] = {}
@@ -85,7 +92,7 @@ class DiffusionDrawingDocker(krita.DockWidget):
             lambda state: self.handle_lineart_transfer(state == Qt.Checked))
         self.gen_lineart_button = QPushButton("Gen")
         self.gen_lineart_button.setCheckable(True)
-        self.gen_lineart_button.setToolTip("Generate and update lineart continuously while enabled.")
+        self.gen_lineart_button.setToolTip("Generate lineart after drawing has stopped for 250 ms.")
         self.gen_lineart_button.toggled.connect(self.gen_lineart)
 
         # row=0にlineart関連を配置
@@ -135,6 +142,10 @@ class DiffusionDrawingDocker(krita.DockWidget):
         self.log_window.setReadOnly(True)
         self.main_widget.layout().addWidget(self.log_window)
 
+        self._lineart_activity = LineartActivity(self, self.request_lineart_update)
+        for control in (self.lineart_strength, self.lineart_steps, self.lineart_seed):
+            control.valueChanged.connect(self.request_lineart_update)
+
         self.setup_area_none()
 
     def __del__(self):
@@ -142,6 +153,9 @@ class DiffusionDrawingDocker(krita.DockWidget):
             os.removedirs(system_layers.tmp_dir)
 
     def asyncio_step(self):
+        # Krita may process Qt events inside synchronous document operations.
+        if self.event_loop.is_running():
+            return
         self.event_loop.call_soon(self.event_loop.stop)
         self.event_loop.run_forever()
 
@@ -332,23 +346,43 @@ class DiffusionDrawingDocker(krita.DockWidget):
     @pyqtSlot(bool)
     def gen_lineart(self, checked: bool):
         self._lineart_generation += 1
+        self._lineart_pending = False
+        self._last_lineart_input = None
+        self._lineart_activity.set_enabled(checked)
+        if checked:
+            self.request_lineart_update()
         self.log(f"gen_lineart {'ON' if checked else 'OFF'}")
         if checked and self._lineart_task is None:
             self.disable_buttons(keep_lineart_controls=True)
             self._lineart_task = self.spawn_future(self.gen_lineart_loop())
 
+    def request_lineart_update(self, *_):
+        if self.gen_lineart_button.isChecked():
+            self._lineart_generation += 1
+            self._lineart_pending = True
+            self._lineart_deadline = time.monotonic() + LINEART_IDLE_SECONDS
+
     async def gen_lineart_loop(self):
         reported_backend = False
         try:
             while self.gen_lineart_button.isChecked():
-                if not await self.gen_lineart_inner():
+                document = self.active_document
+                if document is None or document not in krita.Krita.instance().documents():
                     break
-                if not reported_backend:
-                    self.log(f"Lineart backend: {self.native_lineart.backend_description}")
-                    reported_backend = True
-                # Give Qt a chance to paint and handle input before the next capture.
-                # There is deliberately no drawing/change detection or debounce.
-                await asyncio.sleep(0)
+                if (self._lineart_pending and not self._lineart_activity.busy
+                        and time.monotonic() >= self._lineart_deadline):
+                    # A released stroke can still have queued brush/stabilizer
+                    # jobs. Do not block the UI waiting for them to finish.
+                    if document.tryBarrierLock():
+                        document.unlock()
+                        self._lineart_pending = False
+                        if not await self.gen_lineart_inner():
+                            break
+                        if not reported_backend and self.native_lineart.backend_description:
+                            self.log(f"Lineart backend: {self.native_lineart.backend_description}")
+                            reported_backend = True
+                # Poll only lightweight state, never image pixels, while waiting.
+                await asyncio.sleep(0.03)
         finally:
             self._lineart_task = None
             self.gen_lineart_button.setChecked(False)
@@ -367,14 +401,21 @@ class DiffusionDrawingDocker(krita.DockWidget):
         if min(width, height) < 16:
             raise ValueError("Lineart generation requires an image of at least 16 × 16 pixels.")
         layer_id = system_layers.lineart
+        scribble = capture_bgra(document, SCRIBBLE_COLOR_LABEL)
+        lineart = capture_bgra(document, LINEART_COLOR_LABEL)
+        strength, seed, steps = (self.lineart_strength.value(), self.lineart_seed.value(),
+                                 self.lineart_steps.value())
+        fingerprint = (width, height, strength, seed, steps,
+                       hashlib.sha256(scribble).digest(), hashlib.sha256(lineart).digest())
+        # UI actions such as zoom and layer selection may request a check without
+        # changing the actual model inputs. Output repaint events never request one.
+        if generation != self._lineart_generation or fingerprint == self._last_lineart_input:
+            return True
         output = await self.native_lineart.infer(
-            scribble=capture_bgra(document, SCRIBBLE_COLOR_LABEL),
-            lineart=capture_bgra(document, LINEART_COLOR_LABEL),
-            width=width, height=height,
-            strength=self.lineart_strength.value(), seed=self.lineart_seed.value(),
-            denoise_steps=self.lineart_steps.value(),
+            scribble=scribble, lineart=lineart, width=width, height=height,
+            strength=strength, seed=seed, denoise_steps=steps,
         )
-        # OFF/ON can happen while the native worker is still running. Finish that
+        # Drawing or OFF/ON can happen while the native worker is running. Finish that
         # inference before starting another, but never apply its obsolete result.
         if not self.gen_lineart_button.isChecked():
             return False
@@ -401,6 +442,7 @@ class DiffusionDrawingDocker(krita.DockWidget):
         finally:
             layer.setLocked(True)
         document.refreshProjection()
+        self._last_lineart_input = fingerprint
         return True
 
     def handle_shadow_transfer(self, transfer: bool):
