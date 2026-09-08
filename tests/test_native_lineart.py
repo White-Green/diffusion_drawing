@@ -255,6 +255,29 @@ class ApplyTests(unittest.IsolatedAsyncioTestCase):
         docker.disable_buttons.assert_called_once_with(keep_lineart_controls=True)
         docker.enable_buttons.assert_called_once()
 
+    async def test_scribble_color_changes_are_ignored_but_opacity_changes_regenerate(self):
+        docker, document, layer = self.make_docker()
+        scribble = bytes([0, 0, 0, 128]) * 16 * 16
+        lineart = bytes(16 * 16 * 4)
+
+        def capture(document, label):
+            return scribble if label == self.ui.SCRIBBLE_COLOR_LABEL else lineart
+
+        with patch.object(self.ui, "capture_bgra", side_effect=capture):
+            await docker.gen_lineart_inner()
+            scribble = bytes([255, 255, 255, 128]) * 16 * 16
+            await docker.gen_lineart_inner()
+            self.assertEqual(docker.native_lineart.infer.await_count, 1)
+            scribble = bytes([255, 255, 255, 255]) * 16 * 16
+            await docker.gen_lineart_inner()
+            self.assertEqual(docker.native_lineart.infer.await_count, 2)
+            # The existing lineart still uses its color as well as its alpha.
+            lineart = bytes([0, 0, 0, 255]) * 16 * 16
+            await docker.gen_lineart_inner()
+            lineart = bytes([255, 255, 255, 255]) * 16 * 16
+            await docker.gen_lineart_inner()
+            self.assertEqual(docker.native_lineart.infer.await_count, 4)
+
     async def test_stroke_held_still_and_rapid_strokes_wait_before_capture(self):
         docker, document, layer = self.make_docker()
         with patch.object(self.ui, "capture_bgra", return_value=bytes(16 * 16 * 4)) as capture:

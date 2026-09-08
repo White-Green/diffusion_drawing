@@ -17,8 +17,11 @@ async def smoke(plugin: Path) -> None:
     assert native.BACKEND == "wgpu", f"Expected wgpu wheel, got {native.BACKEND}"
     model = integration.NativeLineart()
     width, height = 33, 17
+    scribble = bytearray(width * height * 4)
+    for y in range(height):
+        scribble[(y * width + width // 2) * 4 + 3] = (64, 128, 255)[y % 3]
     options = dict(
-        scribble=bytes([255, 255, 255, 255]) * width * height,
+        scribble=bytes(scribble),
         lineart=bytes(width * height * 4), width=width, height=height,
         strength=0.5, seed=42, denoise_steps=2,
     )
@@ -29,10 +32,14 @@ async def smoke(plugin: Path) -> None:
     assert len(first) == width * height * 4
     assert first == repeated, "A fixed seed must be reproducible"
     assert all(first[index:index + 3] == bytes(3) for index in range(0, len(first), 4))
+    for index in range(0, len(scribble), 4):
+        scribble[index:index + 3] = bytes([255, 80, 190])
+    recolored = await model.infer(**(options | dict(scribble=bytes(scribble))))
+    assert recolored == first, "Scribble RGB must not affect inference when alpha is unchanged"
     # Exercise recursive inference too, rather than only the smallest single-level input.
     width, height = 145, 129
     recursive = await model.infer(**(options | dict(
-        scribble=bytes([255, 255, 255, 255]) * width * height,
+        scribble=bytes(width * height * 4),
         lineart=bytes(width * height * 4), width=width, height=height, denoise_steps=1,
     )))
     assert len(recursive) == width * height * 4
@@ -43,7 +50,7 @@ async def smoke(plugin: Path) -> None:
             pass
         else:
             raise AssertionError(f"Invalid input was accepted: {invalid}")
-    print("Bundled wgpu model: import, inference, padding, recursion, fixed seed and validation passed")
+    print("Bundled wgpu model: import, inference, alpha-only scribble, padding, recursion, fixed seed and validation passed")
 
 
 if __name__ == "__main__":

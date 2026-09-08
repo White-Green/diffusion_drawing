@@ -406,7 +406,7 @@ class DiffusionDrawingDocker(krita.DockWidget):
         strength, seed, steps = (self.lineart_strength.value(), self.lineart_seed.value(),
                                  self.lineart_steps.value())
         fingerprint = (width, height, strength, seed, steps,
-                       hashlib.sha256(scribble).digest(), hashlib.sha256(lineart).digest())
+                       hashlib.sha256(scribble[3::4]).digest(), hashlib.sha256(lineart).digest())
         # UI actions such as zoom and layer selection may request a check without
         # changing the actual model inputs. Output repaint events never request one.
         if generation != self._lineart_generation or fingerprint == self._last_lineart_input:
