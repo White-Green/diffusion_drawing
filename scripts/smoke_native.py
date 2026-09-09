@@ -42,11 +42,17 @@ async def smoke(plugin: Path, provider: str = "cpu") -> None:
     assert recolored == first, "Scribble RGB must not affect inference when alpha is unchanged"
     # Exercise recursive inference too, rather than only the smallest single-level input.
     width, height = 145, 129
-    recursive = await model.infer(**(options | dict(
+    lineart = bytearray(width * height * 4)
+    for y in range(height):
+        lineart[(y * width + width // 2) * 4 + 3] = 255
+        lineart[(y * width + width // 2 + 1) * 4 + 3] = 128
+    recursive_options = options | dict(
         scribble=bytes(width * height * 4),
-        lineart=bytes(width * height * 4), width=width, height=height, denoise_steps=1,
-    )))
+        lineart=bytes(lineart), width=width, height=height, denoise_steps=3,
+    )
+    recursive = await model.infer(**recursive_options)
     assert len(recursive) == width * height * 4
+    assert recursive == await model.infer(**recursive_options)
     for invalid in [dict(strength=float("nan")), dict(denoise_steps=0), dict(scribble=b"")]:
         try:
             await model.infer(**(options | invalid))
