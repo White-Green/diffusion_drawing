@@ -67,6 +67,9 @@ python scripts/package.py --wheel-dir wheels --provider directml --output dist/d
 uv、対象 Python と pip が必要。`wheels/` は空のディレクトリから始める。
 `package.py` は wheelhouse から依存関係込みで一時領域へインストールし、
 モデル推論を実行してから ZIP 化する。ONNX、NumPy、ONNX Runtime と各ライセンスを同梱する。
+通常のDirectMLビルドではDirectMLでの実推論を必須とする。GPUを使えないビルドホストでは
+`--allow-cpu-fallback` を指定すると、DirectML版の同梱を確認したうえでCPUで推論検証できる。
+この指定は検証時だけに適用し、配布プラグインは引き続きDirectMLを優先する。
 ランタイム自体は pure Python wheel だが、NumPy と ORT は OS・CPU・Python minor に依存する。
 ZIP 内の `runtime.json` に対象版を記録し、不一致はモデル読み込み前に通知する。
 
@@ -86,8 +89,10 @@ channels `[4,10,20,40]`、各block 3 conv、126,765パラメータ。
 入出力・操作は維持するが、同梱重みが変わるため旧版と同じSeedでも生成結果は変わる。
 
 GitHub Actions は main・`feat/**`・`rewrite/**` への push、PR、手動実行で
-Windows ZIP をビルドし、同梱された依存関係だけで推論できること、DirectML provider、
+Windows ZIP をビルドし、同梱された依存関係だけで推論できること、DirectML版の同梱、
 パディング・再帰・固定 Seed・入力検証を確認する。
+CIは `--allow-cpu-fallback` を使う。ランナーでDirectMLを初期化できない場合は
+CPUで全推論検証を行い、その旨をログに残す。GPU実機の動作確認とは区別する。
 Artifacts からの再ダウンロード後、従来通り Krita 5.2.9 の公式インポーターでも検証する。
 ローカルでは次を使う（Qt が必要、Krita GUI は不要）。
 

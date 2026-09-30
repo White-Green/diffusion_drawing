@@ -39,9 +39,11 @@ jobs:
           python -m pip download --only-binary=:all: --dest wheels --require-hashes -r runtime-requirements.txt
 
       - name: Package and smoke-test bundled model
+        # Hosted Windows runners may not expose a usable DirectML display adapter.
+        # Still require the DirectML wheel and run every inference check on CPU fallback.
         run: >-
           python scripts/package.py --wheel-dir wheels
-          --provider directml
+          --provider directml --allow-cpu-fallback
           --output dist/diffusion_drawing-windows-x64.zip
 
       - uses: actions/upload-artifact@v7

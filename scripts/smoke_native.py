@@ -1,5 +1,6 @@
 """Exercise the complete packaged ONNX runtime without importing Krita or PyQt."""
 
+import argparse
 import asyncio
 import importlib
 from pathlib import Path
@@ -7,7 +8,7 @@ import sys
 import types
 
 
-async def smoke(plugin: Path, provider: str = "cpu") -> None:
+async def smoke(plugin: Path, provider: str = "cpu", *, allow_cpu_fallback: bool = False) -> None:
     package_name = "_diffusion_drawing_smoke"
     package = types.ModuleType(package_name)
     package.__path__ = [str(plugin.resolve())]
@@ -27,7 +28,17 @@ async def smoke(plugin: Path, provider: str = "cpu") -> None:
     print(f"Bundled model backend: {model.backend_description}", flush=True)
     assert "onnxruntime" in model.backend_description
     if provider == "directml":
-        assert "DmlExecutionProvider" in model.backend_description
+        # CPU fallback must not hide accidentally shipping the CPU-only ORT wheel.
+        available = sys.modules["onnxruntime"].get_available_providers()
+        assert "DmlExecutionProvider" in available, "The bundled runtime is missing DirectML"
+        if "DmlExecutionProvider" not in model.backend_description:
+            assert allow_cpu_fallback, "DirectML inference was required but fell back to CPU"
+            assert "CPUExecutionProvider" in model.backend_description
+            print(
+                "DirectML is bundled, but this host could not initialize it; "
+                "testing CPU fallback. GPU execution is not validated by this run.",
+                flush=True,
+            )
     assert "jax" not in sys.modules and "flax" not in sys.modules
     for dependency in ("numpy", "onnxruntime", "lineartgen_runtime"):
         assert Path(sys.modules[dependency].__file__).is_relative_to(plugin / "_native"), dependency
@@ -64,4 +75,11 @@ async def smoke(plugin: Path, provider: str = "cpu") -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(smoke(Path(sys.argv[1]).resolve(), sys.argv[2] if len(sys.argv) > 2 else "cpu"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("plugin", type=Path)
+    parser.add_argument("provider", choices=("cpu", "directml"), nargs="?", default="cpu")
+    parser.add_argument("--allow-cpu-fallback", action="store_true")
+    args = parser.parse_args()
+    asyncio.run(smoke(
+        args.plugin.resolve(), args.provider, allow_cpu_fallback=args.allow_cpu_fallback,
+    ))

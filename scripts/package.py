@@ -22,7 +22,9 @@ def write_plugin_zip(staging: Path, output: Path) -> None:
             archive.write(path, path.relative_to(staging).as_posix())
 
 
-def package(wheel_dir: Path, output: Path, provider: str = "cpu") -> None:
+def package(
+    wheel_dir: Path, output: Path, provider: str = "cpu", *, allow_cpu_fallback: bool = False,
+) -> None:
     wheels = sorted(wheel_dir.glob("lineartgen_runtime-*.whl"))
     if len(wheels) != 1:
         raise ValueError(f"Expected one lineartgen-runtime wheel in {wheel_dir}, found {len(wheels)}")
@@ -54,9 +56,12 @@ def package(wheel_dir: Path, output: Path, provider: str = "cpu") -> None:
         shutil.copyfile(ROOT / "LICENSE", plugin / "LICENSE")
 
         # Use another process so Windows releases the ORT .pyd before cleanup.
-        subprocess.run([
+        smoke_command = [
             sys.executable, "-B", str(ROOT / "scripts" / "smoke_native.py"), str(plugin), provider,
-        ], check=True)
+        ]
+        if allow_cpu_fallback:
+            smoke_command.append("--allow-cpu-fallback")
+        subprocess.run(smoke_command, check=True)
         write_plugin_zip(staging, output)
     print(f"Created {output}")
 
@@ -66,5 +71,9 @@ if __name__ == "__main__":
     parser.add_argument("--wheel-dir", type=Path, default=ROOT / "wheels")
     parser.add_argument("--output", type=Path, default=ROOT / "dist" / "diffusion_drawing-windows-x64.zip")
     parser.add_argument("--provider", choices=("cpu", "directml"), default="cpu")
+    parser.add_argument(
+        "--allow-cpu-fallback", action="store_true",
+        help="Allow CPU inference in the smoke test when the DirectML build host has no usable adapter",
+    )
     args = parser.parse_args()
-    package(args.wheel_dir, args.output, args.provider)
+    package(args.wheel_dir, args.output, args.provider, allow_cpu_fallback=args.allow_cpu_fallback)
