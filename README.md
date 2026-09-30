@@ -35,7 +35,7 @@ ZIP 更新時は Krita を再起動し、Gen を押す前に上書きインポ�
 scribble（カラーラベル 1）と描き途中の線画（カラーラベル 2）を使い、
 結果は専用の描画レイヤーに反映する。Strength、Denoise steps（1〜20）、Seed は
 パネルから指定できる。同じデバイス上では、同じ入力・設定・Seed で再現できる。
-runtime 0.2.1 は画像とノイズ強度マップを各解像度へ縮小してから各段にノイズを加える。
+runtime 0.2.1 以降は画像とノイズ強度マップを各解像度へ縮小してから各段にノイズを加える。
 denoise の各ステップは段ごとの状態を引き継ぐ。多段推論の結果は旧 runtime から変わる。
 GPU やドライバーが異なる場合は浮動小数点演算の差が生じることがある。
 画像サイズは各辺 16 ピクセル以上で、2 のべき乗以外のサイズにも対応する。
@@ -75,10 +75,15 @@ Windows DirectML の依存解決・推論確認は Windows 上で実行する。
 Python 3.10 では実際に対応 wheel のある ORT CPU 1.23.2 / DirectML 1.22.0 を固定している。
 CPU と DirectML を同じ環境へ両方インストールしない（同じ import 名を使う）。
 
-同梱モデルは既存 epoch 1500 重みを Python で変換したもの。
-新しく学習したモデルは lineartgen の export コマンドで
+runtime 0.2.2 は、JAXで100,000更新学習した最大候補の基準UNetを同梱する。
+channels `[4,10,20,40]`、各block 3 conv、126,765パラメータ。
+実験の主seed 42（data seed 47）のEMA重み `seed42_baseline` を使い、
+出自とSHA256を `lineartgen_runtime/assets/model-source.json` に記録している。
+品質の評価結果は [lineartgenの最終報告](lineartgen/docs/completion-results-20260930.md)を参照。
+別の学習済みモデルに変更する場合は lineartgen の export コマンドで
 `packages/lineartgen-runtime/src/lineartgen_runtime/assets/model.onnx` に書き出して再ビルドする。
-入出力・操作は維持するが、乱数生成器と実行 backend が変わるため旧版と同じ Seed の出力は一致しない。
+モデルを変更した場合は `model-source.json` の出自・hashも更新する。
+入出力・操作は維持するが、同梱重みが変わるため旧版と同じSeedでも生成結果は変わる。
 
 GitHub Actions は main・`feat/**`・`rewrite/**` への push、PR、手動実行で
 Windows ZIP をビルドし、同梱された依存関係だけで推論できること、DirectML provider、
