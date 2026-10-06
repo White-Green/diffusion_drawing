@@ -69,7 +69,10 @@ def package(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wheel-dir", type=Path, default=ROOT / "wheels")
-    parser.add_argument("--output", type=Path, default=ROOT / "dist" / "diffusion_drawing-windows-x64.zip")
+    parser.add_argument(
+        "--output", type=Path,
+        default=ROOT / "dist" / f"diffusion_drawing-windows-x64-py{sys.version_info.major}.{sys.version_info.minor}.zip",
+    )
     parser.add_argument("--provider", choices=("cpu", "directml"), default="cpu")
     parser.add_argument(
         "--allow-cpu-fallback", action="store_true",

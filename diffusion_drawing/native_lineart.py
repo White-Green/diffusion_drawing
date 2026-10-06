@@ -69,7 +69,9 @@ class NativeLineart:
                         if list(sys.version_info[:2]) != expected:
                             raise RuntimeError(
                                 f"This ZIP requires Krita with Python {'.'.join(map(str, expected))}; "
-                                f"this Krita uses {sys.version_info.major}.{sys.version_info.minor}."
+                                f"this Krita uses {sys.version_info.major}.{sys.version_info.minor}. "
+                                f"Use a ZIP ending in -py{sys.version_info.major}.{sys.version_info.minor}.zip "
+                                "built for this Krita, then restart Krita after importing it."
                             )
                     if str(bundled) not in sys.path:
                         sys.path.insert(0, str(bundled))

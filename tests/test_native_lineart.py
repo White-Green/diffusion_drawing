@@ -1,8 +1,10 @@
 import asyncio
 import copy
 import importlib
+import json
 from pathlib import Path
 import sys
+import tempfile
 import threading
 import types
 import unittest
@@ -82,6 +84,23 @@ class CaptureTests(unittest.TestCase):
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wrong_python_rejected_before_import_with_matching_zip_hint(self):
+        worker = native_lineart.NativeLineart()
+        different_python = [3, 10] if sys.version_info[:2] != (3, 10) else [3, 13]
+        with tempfile.TemporaryDirectory() as directory:
+            plugin = Path(directory)
+            (plugin / "_native").mkdir()
+            (plugin / "_native" / "runtime.json").write_text(json.dumps({"python": different_python}))
+            with patch.object(native_lineart, "__file__", str(plugin / "native_lineart.py")), \
+                    patch.object(native_lineart.importlib, "import_module") as import_runtime:
+                with self.assertRaises(RuntimeError) as error:
+                    await worker.infer(scribble=b"", lineart=b"", width=16, height=16,
+                                       strength=0.5, seed=0, denoise_steps=1)
+                self.assertIn(f"-py{sys.version_info.major}.{sys.version_info.minor}.zip", str(error.exception))
+                self.assertIn("restart Krita", str(error.exception))
+                import_runtime.assert_not_called()
+        self.assertIsNone(worker.backend_description)
+
     async def test_model_load_and_inference_run_off_ui_thread_and_reuse_model(self):
         main_thread = threading.get_ident()
         threads = []

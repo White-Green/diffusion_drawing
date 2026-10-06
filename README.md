@@ -10,9 +10,16 @@
 - https://civitai.com/models/260267?modelVersionId=403131 のModelとVAE両方、及び https://civitai.com/models/441432 をComfyUIから使えるようにする
 
 ### Krita Plugin
-[Releases](https://github.com/White-Green/diffusion_drawing/releases/latest) から
-`diffusion_drawing-windows-x64.zip` をダウンロードし、Krita の Python プラグイン
-インポーターで読み込む。Windows x64、CPython 3.10 を組み込んだ Krita が対象。別の Python minor 版ではその版向けに ZIP をビルドする。
+[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fjax) の
+成功したビルドの Artifacts から `diffusion_drawing-windows-x64-py3.13.zip` を
+ダウンロードし、Krita の Python プラグインインポーターで読み込む。
+配布対象は Python 3.13 を内蔵した Windows x64 版 Krita。
+main のビルドは [Releases](https://github.com/White-Green/diffusion_drawing/releases/latest) にも公開する。
+
+Python の版は Krita の Scripter で `import sys; print(sys.version)` を実行して確認できる。
+PC に別途インストールした Python の版ではなく、Krita 内蔵版に合わせる。
+旧 `diffusion_drawing-windows-x64.zip` は Python 3.10 専用で、現在は配布を更新しない。
+別の Python minor 版では、その版向けに ZIP をビルドする。
 
 lineart の Gen は、同梱された ONNX モデルを ONNX Runtime で推論する。
 Windows ZIP では DirectML（DirectX 12、既定の GPU）を優先し、CPU provider も利用できる。
@@ -52,7 +59,7 @@ Krita の整数 RGBA のチャンネル順序については
 
 `lineartgen/` submodule の JAX rewrite を使う。学習とモデル変更の手順は
 その README を参照。配布に必要なのは `packages/lineartgen-runtime` のみ。
-Python は配布先 Krita の minor 版と一致させる（CI は 3.10 x64）。
+Python は配布先 Krita の minor 版と一致させる（CI・以下の手順は 3.13 x64）。
 
 ```powershell
 git submodule update --init --recursive
@@ -61,7 +68,7 @@ uv export --project lineartgen/packages/lineartgen-runtime --frozen --extra dire
 python -m pip download --only-binary=:all: --dest wheels --require-hashes -r runtime-requirements.txt
 python -m pip install PyQt5==5.15.11
 python -m unittest discover -s tests -v
-python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-windows-x64.zip
+python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-windows-x64-py3.13.zip
 ```
 
 uv、対象 Python と pip が必要。`wheels/` は空のディレクトリから始める。
@@ -75,7 +82,6 @@ ZIP 内の `runtime.json` に対象版を記録し、不一致はモデル読み
 
 Linux の CPU パッケージでは export の extra と package の provider を `cpu` に変える。
 Windows DirectML の依存解決・推論確認は Windows 上で実行する。
-Python 3.10 では実際に対応 wheel のある ORT CPU 1.23.2 / DirectML 1.22.0 を固定している。
 CPU と DirectML を同じ環境へ両方インストールしない（同じ import 名を使う）。
 
 runtime 0.2.2 は、JAXで100,000更新学習した最大候補の基準UNetを同梱する。
@@ -89,7 +95,8 @@ channels `[4,10,20,40]`、各block 3 conv、126,765パラメータ。
 入出力・操作は維持するが、同梱重みが変わるため旧版と同じSeedでも生成結果は変わる。
 
 GitHub Actions は main・`feat/**`・`rewrite/**` への push、PR、手動実行で
-Windows ZIP をビルドし、同梱された依存関係だけで推論できること、DirectML版の同梱、
+Python 3.13 用の Windows ZIP をビルドし、Python 3.13 で
+同梱された依存関係だけで推論できること、DirectML版の同梱、
 パディング・再帰・固定 Seed・入力検証を確認する。
 CIは `--allow-cpu-fallback` を使う。ランナーでDirectMLを初期化できない場合は
 CPUで全推論検証を行い、その旨をログに残す。GPU実機の動作確認とは区別する。
@@ -97,7 +104,7 @@ Artifacts からの再ダウンロード後、従来通り Krita 5.2.9 の公式
 ローカルでは次を使う（Qt が必要、Krita GUI は不要）。
 
 ```powershell
-python scripts/check_krita_import.py dist/diffusion_drawing-windows-x64.zip
+python scripts/check_krita_import.py dist/diffusion_drawing-windows-x64-py3.13.zip
 ```
 
 main への push だけが Release を作る。作業ブランチでは Release を作らない。
