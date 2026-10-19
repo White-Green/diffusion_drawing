@@ -33,6 +33,7 @@ Undo / Redo やレイヤー操作でも入力を確認する。生成結果の�
 Gen を OFF にすると更新を止める。実行中の推論は完了まで待つが、その結果は適用しない。
 ドキュメント切り替え・クローズ・エラー時にも自動的に OFF になる。
 Strength・Lineart passes は ON のまま変更でき、変更が止まってから再生成する。
+まずStrength 0.5・Lineart passes 3で試す。
 Lineart passes は1〜6段、既定3段。今回のモデルは決定的なのでSeedは無効。
 Transfer や shadow / light 生成を使うときは Gen を OFF にして実行中の推論の完了を待つ。
 生成後のログに `Lineart backend: onnxruntime graph: DmlExecutionProvider, CPUExecutionProvider` を表示する。
@@ -88,10 +89,14 @@ Windows DirectML の依存解決・推論確認は Windows 上で実行する。
 CPU と DirectML を同じ環境へ両方インストールしない（同じ import 名を使う）。
 
 runtime 0.3.0 は22,725パラメータのgraphモデルを使う。
+16,200更新の重みから84,000更新追加し、累計100,200更新のEMAを同梱した。
 学習更新数、checkpointと6個のONNXのSHA256は
 `lineartgen_runtime/assets/graph-model.json`、詳しい出自は`model-source.json`に記録する。
 合成下描きだけで学習した試用版で、実際の絵での品質はまだ評価が必要。
-幅が非常に広い線や曖昧な重ね描きでは、余分な線・端の閉ループが残る場合がある。
+一部の幅や曖昧な重ね描きでは、余分な線・点・端の閉ループや局所的な太りが残る。
+新しい寸法のベタ塗りが穴だらけになる、または中心線だけになる失敗もあり、塗りの復元には適さない。
+未使用16例の実出力と失敗例は、submodule内の
+[graph試用版の評価](lineartgen/docs/graph-preview-20261019.md)に保存した。
 旧UNetとは構造・学習目的が異なり、出力も変わる。
 6個のONNX、manifest、独立したJAX参照出力を同じcheckpointから作り直してから再ビルドする。
 
