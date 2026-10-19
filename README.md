@@ -10,8 +10,8 @@
 - https://civitai.com/models/260267?modelVersionId=403131 のModelとVAE両方、及び https://civitai.com/models/441432 をComfyUIから使えるようにする
 
 ### Krita Plugin
-[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fjax) の
-成功したビルドの Artifacts から `diffusion_drawing-windows-x64-py3.13.zip` を
+[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fgraph-preview-20261019) の
+成功したビルドの Artifacts から `diffusion_drawing-graph-preview-windows-x64-py3.13.zip` を
 ダウンロードし、Krita の Python プラグインインポーターで読み込む。
 配布対象は Python 3.13 を内蔵した Windows x64 版 Krita。
 main のビルドは [Releases](https://github.com/White-Green/diffusion_drawing/releases/latest) にも公開する。
@@ -32,18 +32,21 @@ lineart の **Gen はトグル**で、ON にすると一度生成し、その後
 Undo / Redo やレイヤー操作でも入力を確認する。生成結果の再描画は次の生成を起動しない。
 Gen を OFF にすると更新を止める。実行中の推論は完了まで待つが、その結果は適用しない。
 ドキュメント切り替え・クローズ・エラー時にも自動的に OFF になる。
-Strength・Denoise steps・Seed は ON のまま変更でき、変更が止まってから再生成する。
+Strength・Lineart passes は ON のまま変更でき、変更が止まってから再生成する。
+Lineart passes は1〜6段、既定3段。今回のモデルは決定的なのでSeedは無効。
 Transfer や shadow / light 生成を使うときは Gen を OFF にして実行中の推論の完了を待つ。
-生成後のログに `Lineart backend: onnxruntime: DmlExecutionProvider, CPUExecutionProvider` を表示する。
+生成後のログに `Lineart backend: onnxruntime graph: DmlExecutionProvider, CPUExecutionProvider` を表示する。
 初回生成には ONNX セッションと GPU の初期化時間がかかる。
 ZIP 更新時は Krita を再起動し、Gen を押す前に上書きインポートする。
 インポート後にもう一度 Krita を再起動して、新しいランタイムを読み込む。
 線画生成には ComfyUI、Python パッケージの追加インストール、モデルのダウンロードは不要。
 scribble（カラーラベル 1）と描き途中の線画（カラーラベル 2）を使い、
-結果は専用の描画レイヤーに反映する。Strength、Denoise steps（1〜20）、Seed は
-パネルから指定できる。同じデバイス上では、同じ入力・設定・Seed で再現できる。
-runtime 0.2.1 以降は画像とノイズ強度マップを各解像度へ縮小してから各段にノイズを加える。
-denoise の各ステップは段ごとの状態を引き継ぐ。多段推論の結果は旧 runtime から変わる。
+結果は専用の描画レイヤーに反映する。StrengthとLineart passesをパネルから指定できる。
+今回のgraphモデルは下描きから線の位置・接続・幅・塗りを予測し、不透明な線分として描く。
+画素値の平均を線画として出力する方式ではなく、線の縁にはアンチエイリアスが残る。
+入力を局所的な濃さで正規化してから解像度ごとに縮小し、小さい段の占有予測を次の段へ渡す。
+ガウシアンノイズは加えない。Strengthは学習した条件として渡し、0では入力を保つ。
+描き途中の線画の不透明な画素は保護する。同じデバイス・入力・設定では決定的に動く。
 GPU やドライバーが異なる場合は浮動小数点演算の差が生じることがある。
 画像サイズは各辺 16 ピクセル以上で、2 のべき乗以外のサイズにも対応する。
 
@@ -68,7 +71,7 @@ uv export --project lineartgen/packages/lineartgen-runtime --frozen --extra dire
 python -m pip download --only-binary=:all: --dest wheels --require-hashes -r runtime-requirements.txt
 python -m pip install PyQt5==5.15.11
 python -m unittest discover -s tests -v
-python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-windows-x64-py3.13.zip
+python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-graph-preview-windows-x64-py3.13.zip
 ```
 
 uv、対象 Python と pip が必要。`wheels/` は空のディレクトリから始める。
@@ -84,27 +87,25 @@ Linux の CPU パッケージでは export の extra と package の provider �
 Windows DirectML の依存解決・推論確認は Windows 上で実行する。
 CPU と DirectML を同じ環境へ両方インストールしない（同じ import 名を使う）。
 
-runtime 0.2.2 は、JAXで100,000更新学習した最大候補の基準UNetを同梱する。
-channels `[4,10,20,40]`、各block 3 conv、126,765パラメータ。
-実験の主seed 42（data seed 47）のEMA重み `seed42_baseline` を使い、
-出自とSHA256を `lineartgen_runtime/assets/model-source.json` に記録している。
-品質の評価結果は [lineartgenの最終報告](lineartgen/docs/completion-results-20260930.md)を参照。
-別の学習済みモデルに変更する場合は lineartgen の export コマンドで
-`packages/lineartgen-runtime/src/lineartgen_runtime/assets/model.onnx` に書き出して再ビルドする。
-モデルを変更した場合は `model-source.json` の出自・hashも更新する。
-入出力・操作は維持するが、同梱重みが変わるため旧版と同じSeedでも生成結果は変わる。
+runtime 0.3.0 は22,725パラメータのgraphモデルを使う。
+学習更新数、checkpointと6個のONNXのSHA256は
+`lineartgen_runtime/assets/graph-model.json`、詳しい出自は`model-source.json`に記録する。
+合成下描きだけで学習した試用版で、実際の絵での品質はまだ評価が必要。
+幅が非常に広い線や曖昧な重ね描きでは、余分な線・端の閉ループが残る場合がある。
+旧UNetとは構造・学習目的が異なり、出力も変わる。
+6個のONNX、manifest、独立したJAX参照出力を同じcheckpointから作り直してから再ビルドする。
 
 GitHub Actions は main・`feat/**`・`rewrite/**` への push、PR、手動実行で
 Python 3.13 用の Windows ZIP をビルドし、Python 3.13 で
 同梱された依存関係だけで推論できること、DirectML版の同梱、
-パディング・再帰・固定 Seed・入力検証を確認する。
+6段すべての独立JAX参照との一致、パディング・再帰・保護領域・入力検証を確認する。
 CIは `--allow-cpu-fallback` を使う。ランナーでDirectMLを初期化できない場合は
 CPUで全推論検証を行い、その旨をログに残す。GPU実機の動作確認とは区別する。
 Artifacts からの再ダウンロード後、従来通り Krita 5.2.9 の公式インポーターでも検証する。
 ローカルでは次を使う（Qt が必要、Krita GUI は不要）。
 
 ```powershell
-python scripts/check_krita_import.py dist/diffusion_drawing-windows-x64-py3.13.zip
+python scripts/check_krita_import.py dist/diffusion_drawing-graph-preview-windows-x64-py3.13.zip
 ```
 
 main への push だけが Release を作る。作業ブランチでは Release を作らない。
