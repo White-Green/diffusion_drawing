@@ -10,8 +10,8 @@
 - https://civitai.com/models/260267?modelVersionId=403131 のModelとVAE両方、及び https://civitai.com/models/441432 をComfyUIから使えるようにする
 
 ### Krita Plugin
-[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fgraph-preview-20261019) の
-成功したビルドの Artifacts から `diffusion_drawing-graph-preview-windows-x64-py3.13.zip` を
+[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fgraph-preview-20261024) の
+成功したビルドの Artifacts から `diffusion_drawing-native-width-152400-windows-x64-py3.13.zip` を
 ダウンロードし、Krita の Python プラグインインポーターで読み込む。
 配布対象は Python 3.13 を内蔵した Windows x64 版 Krita。
 main のビルドは [Releases](https://github.com/White-Green/diffusion_drawing/releases/latest) にも公開する。
@@ -72,7 +72,7 @@ uv export --project lineartgen/packages/lineartgen-runtime --frozen --extra dire
 python -m pip download --only-binary=:all: --dest wheels --require-hashes -r runtime-requirements.txt
 python -m pip install PyQt5==5.15.11
 python -m unittest discover -s tests -v
-python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-graph-preview-windows-x64-py3.13.zip
+python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-native-width-152400-windows-x64-py3.13.zip
 ```
 
 uv、対象 Python と pip が必要。`wheels/` は空のディレクトリから始める。
@@ -88,17 +88,17 @@ Linux の CPU パッケージでは export の extra と package の provider �
 Windows DirectML の依存解決・推論確認は Windows 上で実行する。
 CPU と DirectML を同じ環境へ両方インストールしない（同じ import 名を使う）。
 
-runtime 0.3.0 は22,725パラメータのgraphモデルを使う。
-16,200更新の重みから84,000更新追加し、累計100,200更新のEMAを同梱した。
-学習更新数、checkpointと6個のONNXのSHA256は
-`lineartgen_runtime/assets/graph-model.json`、詳しい出自は`model-source.json`に記録する。
-合成下描きだけで学習した試用版で、実際の絵での品質はまだ評価が必要。
-一部の幅や曖昧な重ね描きでは、余分な線・点・端の閉ループや局所的な太りが残る。
-新しい寸法のベタ塗りが穴だらけになる、または中心線だけになる失敗もあり、塗りの復元には適さない。
-未使用16例の実出力と失敗例は、submodule内の
-[graph試用版の評価](lineartgen/docs/graph-preview-20261019.md)に保存した。
-旧UNetとは構造・学習目的が異なり、出力も変わる。
-6個のONNX、manifest、独立したJAX参照出力を同じcheckpointから作り直してから再ビルドする。
+runtime 0.4.0 は45,846パラメータで、形状と幅を別のCNNで推定する。
+累計152,400更新、最後の6,000更新まで完了したEMAを同梱する。
+1/2/4/8/16/32倍の線画と、線幅・筆圧の変化する合成下描きを学習し、旧8px線幅上限も外した。
+累計には親モデルと以前の構造での学習を含み、現在の構造をゼロから152,400更新した意味ではない。
+下描きと描き途中の線画を別々に扱い、元の下描きの濃度も各解像度で参照する。
+薄い細線が細くなりすぎる、密集した輪郭が途切れる、隣接する極細線が太る課題は残る。
+これは利用者が実際の絵で試すための版で、品質目標達成を宣言するものではない。
+重みと6個のONNXのSHA256は `lineartgen_runtime/assets/graph-model.json`、
+詳しい学習履歴・選定理由は `model-source.json` に記録する。
+[今回の試用版の説明と比較画像](lineartgen/docs/native-preview-20261024.md)を参照。
+6段の独立JAX参照出力、別描画実装の参照画像、BGRA入出力の一致もCIで確認する。
 
 GitHub Actions は main・`feat/**`・`rewrite/**` への push、PR、手動実行で
 Python 3.13 用の Windows ZIP をビルドし、Python 3.13 で
@@ -110,7 +110,7 @@ Artifacts からの再ダウンロード後、従来通り Krita 5.2.9 の公式
 ローカルでは次を使う（Qt が必要、Krita GUI は不要）。
 
 ```powershell
-python scripts/check_krita_import.py dist/diffusion_drawing-graph-preview-windows-x64-py3.13.zip
+python scripts/check_krita_import.py dist/diffusion_drawing-native-width-152400-windows-x64-py3.13.zip
 ```
 
 main への push だけが Release を作る。作業ブランチでは Release を作らない。

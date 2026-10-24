@@ -56,10 +56,28 @@ async def smoke(plugin: Path, provider: str = "cpu", *, allow_cpu_fallback: bool
     arrays = assets / "graph-reference.npz"
     assert hashlib.sha256(arrays.read_bytes()).hexdigest() == reference["arrays_sha256"]
     with np.load(arrays, allow_pickle=False) as z:
-        heads = graph.heads(z["source"], z["strength"], 6)
+        heads = graph.heads(
+            z["source"], z["strength"], 6,
+            **{name: z[name] for name in ("layer_guide", "detail_guide", "rough_guide")},
+        )
         for level, head in enumerate(heads):
             np.testing.assert_allclose(head, z[f"head{level}"], **reference["tolerance"])
-        np.testing.assert_allclose(render(heads[0][0]), z["raster"], atol=2 / 255, rtol=0)
+        np.testing.assert_allclose(
+            render(heads[0][0], max_width=graph.metadata["max_stroke_width"]),
+            z["raster"], atol=2 / 255, rtol=0,
+        )
+        native = await model.infer(
+            scribble=z["scribble"].tobytes(), lineart=z["lineart"].tobytes(),
+            width=64, height=64, strength=reference["bgra_strength"], seed=42, denoise_steps=6,
+        )
+        actual = np.frombuffer(native, np.uint8).reshape(64, 64, 4)
+        np.testing.assert_allclose(actual, z["bgra"], atol=1, rtol=0)
+        protected = z["lineart"][..., 3] == 255
+        np.testing.assert_array_equal(actual[protected], z["bgra"][protected])
+    assert graph.metadata["training_steps"] == 152400
+    assert graph.metadata["checkpoint_sha256"] == (
+        "34bf1c87a61cab5cece9b4168c562686be8dd28f5401d8e656dc95d8ff0a29fb"
+    )
     print("All six exported stages match the independent JAX reference", flush=True)
     repeated = await model.infer(**options)
     assert isinstance(first, bytes)
