@@ -10,8 +10,8 @@
 - https://civitai.com/models/260267?modelVersionId=403131 のModelとVAE両方、及び https://civitai.com/models/441432 をComfyUIから使えるようにする
 
 ### Krita Plugin
-[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fgraph-preview-20261024) の
-成功したビルドの Artifacts から `diffusion_drawing-native-width-152400-windows-x64-py3.13.zip` を
+[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fspatial-preview-20261030) の
+成功したビルドの Artifacts から `diffusion_drawing-intent-cleanup-48000-windows-x64-py3.13.zip` を
 ダウンロードし、Krita の Python プラグインインポーターで読み込む。
 配布対象は Python 3.13 を内蔵した Windows x64 版 Krita。
 main のビルドは [Releases](https://github.com/White-Green/diffusion_drawing/releases/latest) にも公開する。
@@ -33,20 +33,21 @@ Undo / Redo やレイヤー操作でも入力を確認する。生成結果の�
 Gen を OFF にすると更新を止める。実行中の推論は完了まで待つが、その結果は適用しない。
 ドキュメント切り替え・クローズ・エラー時にも自動的に OFF になる。
 Strength・Lineart passes は ON のまま変更でき、変更が止まってから再生成する。
-まずStrength 0.5・Lineart passes 3で試す。
-Lineart passes は1〜6段、既定3段。今回のモデルは決定的なのでSeedは無効。
+まずStrength 0.5・Lineart passes 6・Seed 0で試す（今回の確認条件と同じ）。
+Lineart passes は1〜6段、既定6段。Seedはノイズを変更し、同じSeedなら再現する。
 Transfer や shadow / light 生成を使うときは Gen を OFF にして実行中の推論の完了を待つ。
-生成後のログに `Lineart backend: onnxruntime graph: DmlExecutionProvider, CPUExecutionProvider` を表示する。
+生成後のログに `Lineart backend: onnxruntime spatial stage graph: DmlExecutionProvider, CPUExecutionProvider` を表示する。
 初回生成には ONNX セッションと GPU の初期化時間がかかる。
 ZIP 更新時は Krita を再起動し、Gen を押す前に上書きインポートする。
 インポート後にもう一度 Krita を再起動して、新しいランタイムを読み込む。
 線画生成には ComfyUI、Python パッケージの追加インストール、モデルのダウンロードは不要。
 scribble（カラーラベル 1）と描き途中の線画（カラーラベル 2）を使い、
 結果は専用の描画レイヤーに反映する。StrengthとLineart passesをパネルから指定できる。
-今回のgraphモデルは下描きから線の位置・接続・幅・塗りを予測し、不透明な線分として描く。
+今回の試作モデルは、重ね書き・迷い線から主線と枝を選ぶことを目指す。
+下描きから線の位置・接続・幅・塗りを予測し、不透明な線分として描く。
 画素値の平均を線画として出力する方式ではなく、線の縁にはアンチエイリアスが残る。
-入力を局所的な濃さで正規化してから解像度ごとに縮小し、小さい段の占有予測を次の段へ渡す。
-ガウシアンノイズは加えない。Strengthは学習した条件として渡し、0では入力を保つ。
+入力を画像全体で正規化し、解像度ごとに縮小してからガウシアンノイズを加える。
+小さい段の占有・幅予測を全画像で共有して次の段へ渡す。Strength 0では入力を保つ。
 描き途中の線画の不透明な画素は保護する。同じデバイス・入力・設定では決定的に動く。
 GPU やドライバーが異なる場合は浮動小数点演算の差が生じることがある。
 画像サイズは各辺 16 ピクセル以上で、2 のべき乗以外のサイズにも対応する。
@@ -72,7 +73,7 @@ uv export --project lineartgen/packages/lineartgen-runtime --frozen --extra dire
 python -m pip download --only-binary=:all: --dest wheels --require-hashes -r runtime-requirements.txt
 python -m pip install PyQt5==5.15.11
 python -m unittest discover -s tests -v
-python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-native-width-152400-windows-x64-py3.13.zip
+python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-intent-cleanup-48000-windows-x64-py3.13.zip
 ```
 
 uv、対象 Python と pip が必要。`wheels/` は空のディレクトリから始める。
@@ -88,17 +89,15 @@ Linux の CPU パッケージでは export の extra と package の provider �
 Windows DirectML の依存解決・推論確認は Windows 上で実行する。
 CPU と DirectML を同じ環境へ両方インストールしない（同じ import 名を使う）。
 
-runtime 0.4.0 は45,846パラメータで、形状と幅を別のCNNで推定する。
-累計152,400更新、最後の6,000更新まで完了したEMAを同梱する。
-1/2/4/8/16/32倍の線画と、線幅・筆圧の変化する合成下描きを学習し、旧8px線幅上限も外した。
-累計には親モデルと以前の構造での学習を含み、現在の構造をゼロから152,400更新した意味ではない。
-下描きと描き途中の線画を別々に扱い、元の下描きの濃度も各解像度で参照する。
-薄い細線が細くなりすぎる、密集した輪郭が途切れる、隣接する極細線が太る課題は残る。
-これは利用者が実際の絵で試すための版で、品質目標達成を宣言するものではない。
-重みと6個のONNXのSHA256は `lineartgen_runtime/assets/graph-model.json`、
-詳しい学習履歴・選定理由は `model-source.json` に記録する。
-[今回の試用版の説明と比較画像](lineartgen/docs/native-preview-20261024.md)を参照。
-6段の独立JAX参照出力、別描画実装の参照画像、BGRA入出力の一致もCIで確認する。
+runtime 0.5.0の試作モデルは116,045パラメータ、累計48,000更新の最終EMA。
+合成データだけで学習・評価し、同濃度や濃淡の逆転、必要な二本線、短い枝、切れ目、
+閉じた輪郭、幅の強弱を含める。小さい画像から全画像へ1〜6段で再帰する。
+独立な合成形状の確認では、不要線除去と主線保持の同時達成が52/96条件、コピーは5/96条件。
+実手描きへの効果は未確認。重ね線の残存、太さの過剰、主線や枝の切れ目はまだあり、
+Krita上の実際の下描きで方向性を確認するための試験版。
+重みとONNXのSHA256は `lineartgen_runtime/assets/spatial-stage-model.json` に記録する。
+[今回の試用版の説明](lineartgen/docs/intent-preview-20261030.md)を参照。
+再帰1〜6段の独立CPU JAX参照出力と、保護領域を含むBGRA入出力の一致をCIで確認する。
 
 GitHub Actions は main・`feat/**`・`rewrite/**` への push、PR、手動実行で
 Python 3.13 用の Windows ZIP をビルドし、Python 3.13 で
@@ -110,7 +109,7 @@ Artifacts からの再ダウンロード後、従来通り Krita 5.2.9 の公式
 ローカルでは次を使う（Qt が必要、Krita GUI は不要）。
 
 ```powershell
-python scripts/check_krita_import.py dist/diffusion_drawing-native-width-152400-windows-x64-py3.13.zip
+python scripts/check_krita_import.py dist/diffusion_drawing-intent-cleanup-48000-windows-x64-py3.13.zip
 ```
 
 main への push だけが Release を作る。作業ブランチでは Release を作らない。

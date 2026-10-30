@@ -29,7 +29,7 @@ async def smoke(plugin: Path, provider: str = "cpu", *, allow_cpu_fallback: bool
     first = await model.infer(**options)
     print(f"Bundled model backend: {model.backend_description}", flush=True)
     assert "onnxruntime" in model.backend_description
-    assert "graph" in model.backend_description, "This preview must contain the graph model"
+    assert "graph" in model.backend_description, "This preview must contain the spatial stage graph model"
     if provider == "directml":
         # CPU fallback must not hide accidentally shipping the CPU-only ORT wheel.
         available = sys.modules["onnxruntime"].get_available_providers()
@@ -48,37 +48,35 @@ async def smoke(plugin: Path, provider: str = "cpu", *, allow_cpu_fallback: bool
     # Exercise every exported stage against saved JAX reference values on the
     # actual bundled Windows runtime, including DirectML when available.
     import numpy as np
-    from lineartgen_runtime.graph import render
+    from lineartgen_runtime.stage_feedback import forward
     assets = Path(sys.modules["lineartgen_runtime"].__file__).parent / "assets"
-    reference = json.loads((assets / "graph-reference.json").read_text())
-    graph = model._model._graph
-    assert reference["checkpoint_sha256"] == graph.metadata["checkpoint_sha256"]
-    arrays = assets / "graph-reference.npz"
+    reference = json.loads((assets / "spatial-stage-reference.json").read_text())
+    spatial = model._model._spatial
+    assert spatial.metadata["representation"] == "spatial_intent_stage_graph"
+    assert reference["checkpoint_sha256"] == spatial.metadata["checkpoint_sha256"]
+    assert reference["onnx_sha256"] == spatial.metadata["stage"]["sha256"]
+    assert spatial.metadata["training_steps"] == 48000
+    assert spatial.metadata["checkpoint_sha256"] == (
+        "bc8ea33a594740eab7834b776633e9f7d8eda8270033038aa71293f03ea54ab2"
+    )
+    arrays = assets / "spatial-stage-reference.npz"
     assert hashlib.sha256(arrays.read_bytes()).hexdigest() == reference["arrays_sha256"]
     with np.load(arrays, allow_pickle=False) as z:
-        heads = graph.heads(
-            z["source"], z["strength"], 6,
-            **{name: z[name] for name in ("layer_guide", "detail_guide", "rough_guide")},
-        )
-        for level, head in enumerate(heads):
-            np.testing.assert_allclose(head, z[f"head{level}"], **reference["tolerance"])
-        np.testing.assert_allclose(
-            render(heads[0][0], max_width=graph.metadata["max_stroke_width"]),
-            z["raster"], atol=2 / 255, rtol=0,
-        )
-        native = await model.infer(
-            scribble=z["scribble"].tobytes(), lineart=z["lineart"].tobytes(),
-            width=64, height=64, strength=reference["bgra_strength"], seed=42, denoise_steps=6,
-        )
-        actual = np.frombuffer(native, np.uint8).reshape(64, 64, 4)
-        np.testing.assert_allclose(actual, z["bgra"], atol=1, rtol=0)
-        protected = z["lineart"][..., 3] == 255
-        np.testing.assert_array_equal(actual[protected], z["bgra"][protected])
-    assert graph.metadata["training_steps"] == 152400
-    assert graph.metadata["checkpoint_sha256"] == (
-        "34bf1c87a61cab5cece9b4168c562686be8dd28f5401d8e656dc95d8ff0a29fb"
-    )
-    print("All six exported stages match the independent JAX reference", flush=True)
+        h, w = z["scribble"].shape[:2]
+        for depth in reference["depths"]:
+            heads = forward(spatial._get_session(), tuple(z[f"image{depth}_{i}"] for i in range(depth)))
+            for level, head in enumerate(heads):
+                np.testing.assert_allclose(head, z[f"head{depth}_{level}"], **reference["tolerance"])
+            native = await model.infer(
+                scribble=z["scribble"].tobytes(), lineart=z["lineart"].tobytes(),
+                width=w, height=h, strength=reference["bgra_strength"],
+                seed=reference["seed"], denoise_steps=depth,
+            )
+            actual = np.frombuffer(native, np.uint8).reshape(h, w, 4)
+            np.testing.assert_allclose(actual, z[f"bgra{depth}"], atol=reference["bgra_atol"], rtol=0)
+            protected = z["lineart"][..., 3] == 255
+            np.testing.assert_array_equal(actual[protected], z[f"bgra{depth}"][protected])
+    print("All recursion depths 1-6 match independent CPU JAX references", flush=True)
     repeated = await model.infer(**options)
     assert isinstance(first, bytes)
     assert len(first) == width * height * 4
