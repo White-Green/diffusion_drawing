@@ -10,10 +10,16 @@
 - https://civitai.com/models/260267?modelVersionId=403131 のModelとVAE両方、及び https://civitai.com/models/441432 をComfyUIから使えるようにする
 
 ### Krita Plugin
-[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fspatial-preview-20261030) の
-成功したビルドの Artifacts から `diffusion_drawing-intent-cleanup-48000-windows-x64-py3.13.zip` を
+[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fcontext-components-preview-20261108) の
+成功したビルドの Artifacts から `diffusion_drawing-context-components-windows-x64-py3.13.zip` を
 ダウンロードし、Krita の Python プラグインインポーターで読み込む。
 配布対象は Python 3.13 を内蔵した Windows x64 版 Krita。
+今回の独立試験版はCNNの判断を線グラフの連結成分でまとめ、迷い線の除去と主線保持を試す。
+未使用の合成形状で同時達成0/144→92/144に改善した一方、必要な二本線の保持は66/72→40/72へ退行。
+[方式・成功例・失敗例・比較手順](lineartgen/docs/cnn-component-preview-20261108.md)を確認する。
+実手描きは未検証。Strength 0.5 / Lineart passes 6 / Seed 0を出発点に従来版と比較できる。
+同じプラグイン名でインストールするため、元に戻す場合に備えて従来ZIPを残す。
+このrewriteブランチはmainや既存releaseを更新しない。
 main のビルドは [Releases](https://github.com/White-Green/diffusion_drawing/releases/latest) にも公開する。
 
 Python の版は Krita の Scripter で `import sys; print(sys.version)` を実行して確認できる。
@@ -73,7 +79,7 @@ uv export --project lineartgen/packages/lineartgen-runtime --frozen --extra dire
 python -m pip download --only-binary=:all: --dest wheels --require-hashes -r runtime-requirements.txt
 python -m pip install PyQt5==5.15.11
 python -m unittest discover -s tests -v
-python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-intent-cleanup-48000-windows-x64-py3.13.zip
+python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-context-components-windows-x64-py3.13.zip
 ```
 
 uv、対象 Python と pip が必要。`wheels/` は空のディレクトリから始める。
@@ -109,7 +115,7 @@ Artifacts からの再ダウンロード後、従来通り Krita 5.2.9 の公式
 ローカルでは次を使う（Qt が必要、Krita GUI は不要）。
 
 ```powershell
-python scripts/check_krita_import.py dist/diffusion_drawing-intent-cleanup-48000-windows-x64-py3.13.zip
+python scripts/check_krita_import.py dist/diffusion_drawing-context-components-windows-x64-py3.13.zip
 ```
 
 main への push だけが Release を作る。作業ブランチでは Release を作らない。
