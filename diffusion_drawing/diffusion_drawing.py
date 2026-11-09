@@ -404,49 +404,79 @@ class DiffusionDrawingDocker(krita.DockWidget):
         if min(width, height) < 16:
             raise ValueError("Lineart generation requires an image of at least 16 × 16 pixels.")
         layer_id = system_layers.lineart
-        scribble = capture_bgra(document, SCRIBBLE_COLOR_LABEL)
-        lineart = capture_bgra(document, LINEART_COLOR_LABEL)
         strength, seed, steps = (self.lineart_strength.value(), self.lineart_seed.value(),
                                  self.lineart_steps.value())
-        fingerprint = (width, height, strength, seed, steps,
-                       hashlib.sha256(scribble[3::4]).digest(), hashlib.sha256(lineart).digest())
-        # UI actions such as zoom and layer selection may request a check without
-        # changing the actual model inputs. Output repaint events never request one.
-        if generation != self._lineart_generation or fingerprint == self._last_lineart_input:
-            return True
-        output = await self.native_lineart.infer(
-            scribble=scribble, lineart=lineart, width=width, height=height,
-            strength=strength, seed=seed, denoise_steps=steps,
-        )
-        # Drawing or OFF/ON can happen while the native worker is running. Finish that
-        # inference before starting another, but never apply its obsolete result.
-        if not self.gen_lineart_button.isChecked():
-            return False
-        if generation != self._lineart_generation:
-            return True
-        if document != self.active_document:
-            return False
-        if document not in krita.Krita.instance().documents():
-            self.log("The source document was closed; lineart was not applied.")
-            return False
-        if (document.width(), document.height()) != (width, height):
-            raise RuntimeError("The image was resized during generation. Generate lineart again.")
-        layer = document.nodeByUniqueID(layer_id)
-        if layer is None:
-            raise RuntimeError("The output layer was removed. Initialize the document again.")
-        layer.setLocked(False)
+        started = time.monotonic()
+        phase, outcome = "capture", "error"
+        self.log(f"gen_lineart START #{generation}: {width}x{height}, "
+                 f"strength={strength:g}, seed={seed}, passes={steps}")
         try:
-            if not layer.setColorSpace("RGBA", "U8", SRGB_PROFILE):
-                raise RuntimeError("Could not prepare the lineart layer for the generated image.")
-            if not layer.setPixelData(QByteArray(output), 0, 0, width, height):
-                raise RuntimeError("Could not write the generated lineart to its layer.")
-            if not layer.setColorSpace(document.colorModel(), document.colorDepth(), document.colorProfile()):
-                raise RuntimeError("Could not convert the generated lineart to the document's color space.")
+            scribble = capture_bgra(document, SCRIBBLE_COLOR_LABEL)
+            lineart = capture_bgra(document, LINEART_COLOR_LABEL)
+            fingerprint = (width, height, strength, seed, steps,
+                           hashlib.sha256(scribble[3::4]).digest(), hashlib.sha256(lineart).digest())
+            # UI actions such as zoom and layer selection may request a check without
+            # changing the actual model inputs. Output repaint events never request one.
+            if generation != self._lineart_generation:
+                outcome = "skipped: input or generation state changed during capture"
+                return True
+            if fingerprint == self._last_lineart_input:
+                outcome = "skipped: input unchanged"
+                return True
+            phase = "inference"
+            infer_started = time.monotonic()
+            self.log(f"gen_lineart INFER #{generation}: capture={infer_started - started:.3f}s")
+            output = await self.native_lineart.infer(
+                scribble=scribble, lineart=lineart, width=width, height=height,
+                strength=strength, seed=seed, denoise_steps=steps,
+            )
+            self.log(f"gen_lineart INFER DONE #{generation}: "
+                     f"{time.monotonic() - infer_started:.3f}s, "
+                     f"backend={self.native_lineart.backend_description}")
+            # Drawing or OFF/ON can happen while the native worker is running. Finish that
+            # inference before starting another, but never apply its obsolete result.
+            phase = "result validation"
+            if not self.gen_lineart_button.isChecked():
+                outcome = "discarded: generation is OFF"
+                return False
+            if generation != self._lineart_generation:
+                outcome = "discarded: input or generation state changed"
+                return True
+            if document != self.active_document:
+                outcome = "discarded: active document changed"
+                return False
+            if document not in krita.Krita.instance().documents():
+                outcome = "discarded: source document closed"
+                return False
+            if (document.width(), document.height()) != (width, height):
+                raise RuntimeError("The image was resized during generation. Generate lineart again.")
+            layer = document.nodeByUniqueID(layer_id)
+            if layer is None:
+                raise RuntimeError("The output layer was removed. Initialize the document again.")
+            phase = "applying output"
+            layer.setLocked(False)
+            try:
+                if not layer.setColorSpace("RGBA", "U8", SRGB_PROFILE):
+                    raise RuntimeError("Could not prepare the lineart layer for the generated image.")
+                if not layer.setPixelData(QByteArray(output), 0, 0, width, height):
+                    raise RuntimeError("Could not write the generated lineart to its layer.")
+                if not layer.setColorSpace(document.colorModel(), document.colorDepth(), document.colorProfile()):
+                    raise RuntimeError("Could not convert the generated lineart to the document's color space.")
+            finally:
+                layer.setLocked(True)
+            document.refreshProjection()
+            self._last_lineart_input = fingerprint
+            outcome = "applied"
+            return True
+        except asyncio.CancelledError:
+            outcome = f"cancelled during {phase}"
+            raise
+        except Exception as error:
+            outcome = f"error during {phase}: {type(error).__name__}: {error}"
+            raise
         finally:
-            layer.setLocked(True)
-        document.refreshProjection()
-        self._last_lineart_input = fingerprint
-        return True
+            self.log(f"gen_lineart END #{generation}: {outcome}, "
+                     f"total={time.monotonic() - started:.3f}s")
 
     def handle_shadow_transfer(self, transfer: bool):
         self.apply_layer_mask_filtered_color_label([SHADOW_COLOR_LABEL])

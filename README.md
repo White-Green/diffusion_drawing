@@ -42,7 +42,12 @@ Strength・Lineart passes は ON のまま変更でき、変更が止まって�
 まずStrength 0.5・Lineart passes 6・Seed 0で試す（今回の確認条件と同じ）。
 Lineart passes は1〜6段、既定6段。Seedはノイズを変更し、同じSeedなら再現する。
 Transfer や shadow / light 生成を使うときは Gen を OFF にして実行中の推論の完了を待つ。
-生成後のログに `Lineart backend: onnxruntime spatial stage graph: DmlExecutionProvider, CPUExecutionProvider` を表示する。
+`gen_lineart ON` と同じログ欄に、処理番号付きで `START`（画像サイズ・設定）、
+`INFER`（入力取得時間）、`INFER DONE`（推論時間・実行backend）、`END`（結果・合計時間）を表示する。
+`END` には画像を反映したか、入力不変でスキップしたか、描き足しやOFFで破棄したかを記録する。
+エラー時は発生した処理段階も表示し、既存の例外・tracebackログも残す。
+待機中のポーリングごとにはログを出さない。
+生成後の `Lineart backend:` と各回の `INFER DONE` で、実際に使われたproviderを確認できる。
 初回生成には ONNX セッションと GPU の初期化時間がかかる。
 ZIP 更新時は Krita を再起動し、Gen を押す前に上書きインポートする。
 インポート後にもう一度 Krita を再起動して、新しいランタイムを読み込む。
