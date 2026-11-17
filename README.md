@@ -10,13 +10,14 @@
 - https://civitai.com/models/260267?modelVersionId=403131 のModelとVAE両方、及び https://civitai.com/models/441432 をComfyUIから使えるようにする
 
 ### Krita Plugin
-[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fcontext-components-preview-20261108) の
-成功したビルドの Artifacts から `diffusion_drawing-context-components-windows-x64-py3.13.zip` を
+[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fcomponent-learning-preview-20261117) の
+成功したビルドの Artifacts から `diffusion_drawing-component-learning-windows-x64-py3.13.zip` を
 ダウンロードし、Krita の Python プラグインインポーターで読み込む。
 配布対象は Python 3.13 を内蔵した Windows x64 版 Krita。
-今回の独立試験版はCNNの判断を線グラフの連結成分でまとめ、迷い線の除去と主線保持を試す。
-未使用の合成形状で同時達成0/144→92/144に改善した一方、必要な二本線の保持は66/72→40/72へ退行。
-[方式・成功例・失敗例・比較手順](lineartgen/docs/cnn-component-preview-20261108.md)を確認する。
+今回の独立試験版は、推論と同じ成分単位の学習・生成部調整・保持学習を行った140,275パラメータのモデル。
+未使用64合成配置で保持＋除去8→143/810、必要二本保持38→158/384へ改善した。
+必要な輪郭の全消去や迷い線残存はまだある。
+[方式・成功例・失敗例・学習履歴・比較手順](lineartgen/docs/component-learning-preview-20261117.md)を確認する。
 実手描きは未検証。Strength 0.5 / Lineart passes 6 / Seed 0を出発点に従来版と比較できる。
 同じプラグイン名でインストールするため、元に戻す場合に備えて従来ZIPを残す。
 このrewriteブランチはmainや既存releaseを更新しない。
@@ -84,7 +85,7 @@ uv export --project lineartgen/packages/lineartgen-runtime --frozen --extra dire
 python -m pip download --only-binary=:all: --dest wheels --require-hashes -r runtime-requirements.txt
 python -m pip install PyQt5==5.15.11
 python -m unittest discover -s tests -v
-python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-context-components-windows-x64-py3.13.zip
+python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-component-learning-windows-x64-py3.13.zip
 ```
 
 uv、対象 Python と pip が必要。`wheels/` は空のディレクトリから始める。
@@ -100,15 +101,14 @@ Linux の CPU パッケージでは export の extra と package の provider �
 Windows DirectML の依存解決・推論確認は Windows 上で実行する。
 CPU と DirectML を同じ環境へ両方インストールしない（同じ import 名を使う）。
 
-runtime 0.5.0の試作モデルは116,045パラメータ、累計48,000更新の最終EMA。
-合成データだけで学習・評価し、同濃度や濃淡の逆転、必要な二本線、短い枝、切れ目、
-閉じた輪郭、幅の強弱を含める。小さい画像から全画像へ1〜6段で再帰する。
-独立な合成形状の確認では、不要線除去と主線保持の同時達成が52/96条件、コピーは5/96条件。
-実手描きへの効果は未確認。重ね線の残存、太さの過剰、主線や枝の切れ目はまだあり、
-Krita上の実際の下描きで方向性を確認するための試験版。
-重みとONNXのSHA256は `lineartgen_runtime/assets/spatial-stage-model.json` に記録する。
-[今回の試用版の説明](lineartgen/docs/intent-preview-20261030.md)を参照。
-再帰1〜6段の独立CPU JAX参照出力と、保護領域を含むBGRA入出力の一致をCIで確認する。
+runtime 0.5.0の今回のモデルはCNN139,186＋成分readout1,089パラメータ。
+合成データのみ、Attentionなし、再帰1〜6段・各段loss・sqrt(batch) LRを維持する。
+本学習は20,000更新まで評価し、必要線削除が増える前の12,000更新EMAを選択した。
+親runを含む学習量はencoder48k、decoder/head54k、選択部の既存層31.2k・広域層28.2k、readout12k。
+当初30k目安を達成したとはせず、早期停止の判断を記録している。
+重み・ONNX・readoutのSHA256と学習履歴はruntime assetsのmanifestに保存する。
+[今回の試用版・比較画像と限界](lineartgen/docs/component-learning-preview-20261117.md)を参照。
+全段CPU JAXの神経出力と、成分採否・BGRAのCPU ONNX参照をCIで確認する。
 
 GitHub Actions は main・`feat/**`・`rewrite/**` への push、PR、手動実行で
 Python 3.13 用の Windows ZIP をビルドし、Python 3.13 で
@@ -120,7 +120,7 @@ Artifacts からの再ダウンロード後、従来通り Krita 5.2.9 の公式
 ローカルでは次を使う（Qt が必要、Krita GUI は不要）。
 
 ```powershell
-python scripts/check_krita_import.py dist/diffusion_drawing-context-components-windows-x64-py3.13.zip
+python scripts/check_krita_import.py dist/diffusion_drawing-component-learning-windows-x64-py3.13.zip
 ```
 
 main への push だけが Release を作る。作業ブランチでは Release を作らない。

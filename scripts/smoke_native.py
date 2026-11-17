@@ -56,15 +56,26 @@ async def smoke(plugin: Path, provider: str = "cpu", *, allow_cpu_fallback: bool
     assert spatial.metadata["representation"] == "context_component_selection_stage_graph"
     assert reference["checkpoint_sha256"] == spatial.metadata["checkpoint_sha256"]
     assert reference["onnx_sha256"] == spatial.metadata["stage"]["sha256"]
+    assert reference["readout_sha256"] == spatial.metadata["readout"]["sha256"]
     assert spatial.metadata["base_training_steps"] == 48000
-    assert spatial.metadata["selection_training_steps"] == 7200
-    assert spatial.metadata["wide_selection_training_steps"] == 4200
+    assert spatial.metadata["decoder_adaptation_training_steps"] == 6000
+    assert spatial.metadata["selection_training_steps"] == 31200
+    assert spatial.metadata["wide_selection_training_steps"] == 28200
     assert spatial.metadata["route_consistency_training_steps"] == 1200
-    assert spatial.metadata["parameters"] == 139186
-    assert spatial.metadata["component_projection"] == "base_component_mean"
+    assert spatial.metadata["component_retention_training_steps"] == 6000
+    assert spatial.metadata["readout_training_steps"] == 12000
+    assert spatial.metadata["selected_main_training_steps"] == 12000
+    assert spatial.metadata["main_training_evaluated_until"] == 20000
+    assert spatial.metadata["parameters"] == 140275
+    assert spatial.metadata["cnn_parameters"] == 139186
+    assert spatial.metadata["readout_parameters"] == 1089
+    assert spatial.metadata["component_projection"] == "base_component_mean_max_mlp32"
     assert spatial.metadata["component_threshold"] == 0.0
     assert spatial.metadata["checkpoint_sha256"] == (
-        "9c9f2dda03b133ab01610b636270b4aee5aef30005a43828c4e8f05347d5235d"
+        "c0923507a4f377703c3776215f1b03778c37673eb644b355011112532043898b"
+    )
+    assert spatial.metadata["readout"]["sha256"] == (
+        "21bcf13de6048be9d7e18316551f91c1eb2db891a8abcc6de010a566e9e653d3"
     )
     arrays = assets / "spatial-stage-reference.npz"
     assert hashlib.sha256(arrays.read_bytes()).hexdigest() == reference["arrays_sha256"]
@@ -81,7 +92,10 @@ async def smoke(plugin: Path, provider: str = "cpu", *, allow_cpu_fallback: bool
         h, w = z["scribble"].shape[:2]
         for depth in reference["depths"]:
             captured = Capture(spatial._get_session())
-            heads = forward(captured, tuple(z[f"image{depth}_{i}"] for i in range(depth)))
+            heads = forward(
+                captured, tuple(z[f"image{depth}_{i}"] for i in range(depth)),
+                readout=spatial._readout,
+            )
             for level, outputs in enumerate(reversed(captured.outputs)):
                 for name, value in zip(("raw", "state", "base"), outputs, strict=True):
                     np.testing.assert_allclose(value, z[f"{name}{depth}_{level}"], **reference["tolerance"])
