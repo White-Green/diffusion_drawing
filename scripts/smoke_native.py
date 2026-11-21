@@ -29,7 +29,7 @@ async def smoke(plugin: Path, provider: str = "cpu", *, allow_cpu_fallback: bool
     first = await model.infer(**options)
     print(f"Bundled model backend: {model.backend_description}", flush=True)
     assert "onnxruntime" in model.backend_description
-    assert "graph" in model.backend_description, "This preview must contain the spatial stage graph model"
+    assert "latent diffusion" in model.backend_description, "The bundled latent preview must be the default"
     if provider == "directml":
         # CPU fallback must not hide accidentally shipping the CPU-only ORT wheel.
         available = sys.modules["onnxruntime"].get_available_providers()
@@ -45,86 +45,29 @@ async def smoke(plugin: Path, provider: str = "cpu", *, allow_cpu_fallback: bool
     assert "jax" not in sys.modules and "flax" not in sys.modules
     for dependency in ("numpy", "onnxruntime", "lineartgen_runtime"):
         assert Path(sys.modules[dependency].__file__).is_relative_to(plugin / "_native"), dependency
-    # Check neural outputs against CPU JAX before discrete component decisions.
-    # Check final heads/rendering separately against the frozen CPU ONNX evaluation.
-    # Tiny floating-point differences can change a hard component boundary.
     import numpy as np
-    from lineartgen_runtime.selection_feedback import forward
     assets = Path(sys.modules["lineartgen_runtime"].__file__).parent / "assets"
-    reference = json.loads((assets / "spatial-stage-reference.json").read_text())
-    spatial = model._model._spatial
-    assert spatial.metadata["representation"] == "context_component_selection_stage_graph"
-    assert reference["checkpoint_sha256"] == spatial.metadata["checkpoint_sha256"]
-    assert reference["onnx_sha256"] == spatial.metadata["stage"]["sha256"]
-    assert reference["readout_sha256"] == spatial.metadata["readout"]["sha256"]
-    assert spatial.metadata["base_training_steps"] == 48000
-    assert spatial.metadata["decoder_adaptation_training_steps"] == 6000
-    assert spatial.metadata["selection_training_steps"] == 31200
-    assert spatial.metadata["wide_selection_training_steps"] == 28200
-    assert spatial.metadata["route_consistency_training_steps"] == 1200
-    assert spatial.metadata["component_retention_training_steps"] == 6000
-    assert spatial.metadata["readout_training_steps"] == 12000
-    assert spatial.metadata["selected_main_training_steps"] == 12000
-    assert spatial.metadata["main_training_evaluated_until"] == 20000
-    assert spatial.metadata["parameters"] == 140275
-    assert spatial.metadata["cnn_parameters"] == 139186
-    assert spatial.metadata["readout_parameters"] == 1089
-    assert spatial.metadata["component_projection"] == "base_component_mean_max_mlp32"
-    assert spatial.metadata["component_threshold"] == 0.0
-    assert spatial.metadata["checkpoint_sha256"] == (
-        "c0923507a4f377703c3776215f1b03778c37673eb644b355011112532043898b"
-    )
-    assert spatial.metadata["readout"]["sha256"] == (
-        "21bcf13de6048be9d7e18316551f91c1eb2db891a8abcc6de010a566e9e653d3"
-    )
-    arrays = assets / "spatial-stage-reference.npz"
-    assert hashlib.sha256(arrays.read_bytes()).hexdigest() == reference["arrays_sha256"]
-    class Capture:
-        def __init__(self, session):
-            self.session, self.outputs = session, []
-
-        def run(self, names, inputs):
-            values = self.session.run(names, inputs)
-            self.outputs.append(values)
-            return values
-
-    with np.load(arrays, allow_pickle=False) as z:
-        h, w = z["scribble"].shape[:2]
-        for depth in reference["depths"]:
-            captured = Capture(spatial._get_session())
-            heads = forward(
-                captured, tuple(z[f"image{depth}_{i}"] for i in range(depth)),
-                readout=spatial._readout,
+    manifest = assets / "krita-latent.json"
+    digest = Path(__file__).with_name("latent-preview-digest.txt").read_text().strip()
+    assert hashlib.sha256(manifest.read_bytes()).hexdigest() == digest
+    metadata = json.loads(manifest.read_text())
+    assert metadata["format"] == "lineartgen_latent_edit_v1"
+    assert {"vae", "diffusion", "core_checkpoint"} <= metadata["sources"].keys()
+    with np.load(assets / "latent-preview-reference.npz") as refs:
+        for depth in range(1, 7):
+            sk, paint, alpha = [refs[f"{k}_{depth}"] for k in ("scribble", "lineart", "alpha")]
+            h, w = alpha.shape
+            output = await model.infer(
+                scribble=sk.tobytes(), lineart=paint.tobytes(), height=h, width=w,
+                strength=float(refs[f"strength_{depth}"]), seed=int(refs[f"seed_{depth}"]),
+                denoise_steps=depth,
             )
-            for level, outputs in enumerate(reversed(captured.outputs)):
-                for name, value in zip(("raw", "state", "base"), outputs, strict=True):
-                    np.testing.assert_allclose(value, z[f"{name}{depth}_{level}"], **reference["tolerance"])
-            for level, head in enumerate(heads):
-                np.testing.assert_allclose(head, z[f"head{depth}_{level}"], **reference["tolerance"])
-            native = await model.infer(
-                scribble=z["scribble"].tobytes(), lineart=z["lineart"].tobytes(),
-                width=w, height=h, strength=reference["bgra_strength"],
-                seed=reference["seed"], denoise_steps=depth,
-            )
-            actual = np.frombuffer(native, np.uint8).reshape(h, w, 4)
-            np.testing.assert_allclose(actual, z[f"bgra{depth}"], atol=reference["bgra_atol"], rtol=0)
-            protected = z["lineart"][..., 3] == 255
-            np.testing.assert_array_equal(actual[protected], z[f"bgra{depth}"][protected])
-        h, w = z["scene_scribble"].shape[:2]
-        scene = await model.infer(
-            scribble=z["scene_scribble"].tobytes(), lineart=z["scene_lineart"].tobytes(),
-            width=w, height=h, strength=reference["scene_strength"],
-            seed=reference["scene_seed"], denoise_steps=reference["scene_depth"],
-        )
-        np.testing.assert_allclose(
-            np.frombuffer(scene, np.uint8).reshape(h, w, 4), z["scene_bgra"],
-            atol=reference["bgra_atol"], rtol=0,
-        )
-    print(
-        "Depths 1-6: neural outputs match CPU JAX; discrete projection and rendered "
-        "outputs match fixed CPU ONNX references, including a full evaluation scene",
-        flush=True,
-    )
+            bgra = np.frombuffer(output, np.uint8).reshape(h, w, 4)
+            assert not bgra[..., :3].any()
+            err = np.abs(bgra[..., 3].astype(np.int16) - alpha)
+            assert err.max() <= 2 and (err > 1).mean() <= .001, (depth, err.max(), (err > 1).mean())
+            np.testing.assert_array_equal(bgra[..., 3][paint[..., 3] == 255], alpha[paint[..., 3] == 255])
+    print("All six spatial depths match frozen JAX BGRA references with partial ink and erases.", flush=True)
     repeated = await model.infer(**options)
     assert isinstance(first, bytes)
     assert len(first) == width * height * 4
