@@ -52,6 +52,7 @@ async def smoke(plugin: Path, provider: str = "cpu", *, allow_cpu_fallback: bool
     assert hashlib.sha256(manifest.read_bytes()).hexdigest() == digest
     metadata = json.loads(manifest.read_text())
     assert metadata["format"] == "lineartgen_latent_edit_v1"
+    assert metadata["pixel_editor"] == "compact_v1" and metadata["training_updates"] >= 60000
     assert {"vae", "diffusion", "core_checkpoint"} <= metadata["sources"].keys()
     with np.load(assets / "latent-preview-reference.npz") as refs:
         for depth in range(1, 7):

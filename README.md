@@ -10,15 +10,15 @@
 - https://civitai.com/models/260267?modelVersionId=403131 のModelとVAE両方、及び https://civitai.com/models/441432 をComfyUIから使えるようにする
 
 ### Krita Plugin
-[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Flatent-lineart-preview-20261121) の
-成功したビルドの Artifacts から `diffusion_drawing-latent-lineart-windows-x64-py3.13.zip` を
+[Actions](https://github.com/White-Green/diffusion_drawing/actions?query=branch%3Arewrite%2Fcompact-latent-preview-20261125) の
+成功したビルドの Artifacts から `diffusion_drawing-compact-lineart-windows-x64-py3.13.zip` を
 ダウンロードし、Krita の Python プラグインインポーターで読み込む。
 配布対象は Python 3.13 を内蔵した Windows x64 版 Krita。
 この試用版では、1チャンネルのラフから線画VAEと潜在拡散CNNで清書を生成する。
-保存済みの1〜32倍の線画を原寸で学習し、遠方の接続先と途中の筆圧を保って迷い線を落とすことを目指した。
+既存線画に一筆なぞると、軽量化して再学習した後段が周辺の候補を清書する。
 試用は Strength 0.5、Lineart passes 6、Seed 0 から始める。カラーラベル1に下描き、2に描き途中の線画を置く。
 同じラフで、離れた接続先を足した前後、既存線の続きを描いた前後、Undoした後の出力を見比べられる。
-合成画像での成績と失敗例は[試用版の実験記録](lineartgen/docs/latent-lineart-preview-20261121.md)にまとめた。
+合成画像での成績と失敗例は[試用版の実験記録](lineartgen/docs/compact-latent-preview-20261125.md)にまとめた。
 同じプラグイン名でインストールするため、元に戻す場合に備えて従来ZIPを残す。
 このrewriteブランチはmainや既存releaseを更新しない。
 main のビルドは [Releases](https://github.com/White-Green/diffusion_drawing/releases/latest) にも公開する。
@@ -84,7 +84,7 @@ uv export --project lineartgen/packages/lineartgen-runtime --frozen --extra dire
 python -m pip download --only-binary=:all: --dest wheels --require-hashes -r runtime-requirements.txt
 python -m pip install PyQt5==5.15.11
 python -m unittest discover -s tests -v
-python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-latent-lineart-windows-x64-py3.13.zip
+python scripts/package.py --wheel-dir wheels --provider directml --output dist/diffusion_drawing-compact-lineart-windows-x64-py3.13.zip
 ```
 
 uv、対象 Python と pip が必要。`wheels/` は空のディレクトリから始める。
@@ -114,7 +114,7 @@ Artifacts からの再ダウンロード後、従来通り Krita 5.2.9 の公式
 ローカルでは次を使う（Qt が必要、Krita GUI は不要）。
 
 ```powershell
-python scripts/check_krita_import.py dist/diffusion_drawing-latent-lineart-windows-x64-py3.13.zip
+python scripts/check_krita_import.py dist/diffusion_drawing-compact-lineart-windows-x64-py3.13.zip
 ```
 
 main への push だけが Release を作る。作業ブランチでは Release を作らない。

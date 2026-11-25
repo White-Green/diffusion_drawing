@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  PLUGIN_ZIP: diffusion_drawing-latent-lineart-windows-x64-py3.13.zip
+  PLUGIN_ZIP: diffusion_drawing-compact-lineart-windows-x64-py3.13.zip
 
 jobs:
   build:
